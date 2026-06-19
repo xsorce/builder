@@ -1,0 +1,75 @@
+{
+  "slug": "",
+  "title": "Starter Page",
+  "height": 810,
+  "mobileHeight": 844,
+  "backgroundColor": "#fafaf7",
+  "items": [
+    {
+      "id": "starter-title",
+      "type": "text",
+      "text": "Standalone Web Builder ✷",
+      "x": 96,
+      "y": 88,
+      "width": 794,
+      "height": 57,
+      "rotate": 0,
+      "zIndex": 2,
+      "opacity": 1,
+      "fontSize": 54,
+      "fontWeight": 700,
+      "fontFamily": "display",
+      "color": "#111111",
+      "mobile": {
+        "x": -60,
+        "y": 48,
+        "width": 403,
+        "height": 31,
+        "fontSize": 38
+      }
+    },
+    {
+      "id": "starter-note",
+      "type": "text",
+      "text": "Open this page with ?edit=1 to edit, drag, resize, crop, animate, and add media.",
+      "x": 96,
+      "y": 434,
+      "width": 765,
+      "height": 24,
+      "rotate": 0,
+      "zIndex": 2,
+      "opacity": 1,
+      "fontSize": 20,
+      "fontWeight": 500,
+      "fontFamily": "body",
+      "color": "#30302c",
+      "mobile": {
+        "x": -101,
+        "y": 109,
+        "width": 537,
+        "height": 13,
+        "fontSize": 14
+      }
+    },
+    {
+      "id": "starter-image",
+      "type": "image",
+      "src": "/images/default-image.png",
+      "x": 787,
+      "y": 132,
+      "width": 420,
+      "height": 300,
+      "rotate": 0,
+      "zIndex": 1,
+      "opacity": 1,
+      "hoverEffect": "glow",
+      "hoverColor": "#216131",
+      "mobile": {
+        "x": 131,
+        "y": 53,
+        "width": 231,
+        "height": 165
+      }
+    }
+  ]
+}

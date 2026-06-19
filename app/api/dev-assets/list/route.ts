@@ -1,0 +1,44 @@
+import { mkdir, readdir } from "node:fs/promises";
+import path from "node:path";
+import { NextResponse } from "next/server";
+import type { AssetFile } from "@/types/canvas";
+import { assetConfig, getAssetDirectory, isAssetKind, isLocalHost } from "../shared";
+
+export async function GET(request: Request) {
+  if (process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Asset listing is disabled in production." }, { status: 403 });
+  }
+
+  if (!isLocalHost(request.headers.get("host"))) {
+    return NextResponse.json({ error: "Asset listing is local-only." }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const kind = searchParams.get("kind");
+
+  if (!isAssetKind(kind)) {
+    return NextResponse.json({ error: "Invalid asset kind." }, { status: 400 });
+  }
+
+  const config = assetConfig[kind];
+  const directory = getAssetDirectory(kind);
+  await mkdir(directory, { recursive: true });
+
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: AssetFile[] = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const ext = path.extname(entry.name).toLowerCase();
+      return {
+        name: entry.name,
+        src: `${config.publicPath}/${entry.name}`,
+        ext,
+        kind: config.kind,
+        warning: ext === ".avi" ? "AVI may not preview in all browsers. Convert to MP4/WebM for reliable playback." : undefined,
+      };
+    })
+    .filter((file) => config.extensions.has(file.ext))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return NextResponse.json(files);
+}

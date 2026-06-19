@@ -1,0 +1,1626 @@
+"use client";
+
+import Moveable from "react-moveable";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import type { AssetFile, AssetKind, CanvasDocument, CanvasItem, CanvasItemMobileOverride, CanvasItemType } from "@/content/canvas";
+import { AssetPicker } from "@/components/AssetPicker";
+import { CanvasInspector } from "@/components/CanvasInspector";
+import { CanvasItem as RenderCanvasItem } from "@/components/CanvasItem";
+import { CanvasToolbar } from "@/components/CanvasToolbar";
+import { PageBuilderPanel } from "@/components/PageBuilderPanel";
+
+const ARTBOARD_WIDTH = 1440;
+const MOBILE_ARTBOARD_WIDTH = 390;
+const MOBILE_ARTBOARD_HEIGHT = 844;
+const EDITOR_VIEW_MODE_KEY = "web-builder-editor-view-mode";
+const HISTORY_LIMIT = 50;
+const canSave = process.env.NODE_ENV === "development";
+const MIN_ITEM_SIZE = 1;
+const MAX_ITEM_SIZE = 5000;
+const MIN_POSITION = -5000;
+const MAX_POSITION = 10000;
+const MIN_FONT_SIZE = 6;
+const MAX_FONT_SIZE = 300;
+const AUTOSAVE_DELAY = 850;
+
+type CanvasEditorProps = {
+  initialCanvas: CanvasDocument;
+  scale: number;
+};
+
+type CanvasItemStyle = CSSProperties & {
+  "--canvas-x"?: string;
+  "--canvas-y"?: string;
+  "--canvas-rotate"?: string;
+  "--parallax-y"?: string;
+  "--fade-delay"?: string;
+  "--hover-color"?: string;
+  "--hover-lift-y"?: string;
+  "--hover-scale"?: string;
+  "--hover-tilt"?: string;
+  "--hover-float-x"?: string;
+  "--hover-float-y"?: string;
+  "--hover-glow"?: string;
+  "--hover-focus"?: string;
+  "--hover-focus-blur"?: string;
+  "--idle-strength"?: string;
+  "--idle-float-y"?: string;
+  "--idle-breathe-scale"?: string;
+  "--idle-drift-x"?: string;
+  "--idle-drift-y"?: string;
+  "--idle-drift-rotate"?: string;
+  "--idle-sway-rotate"?: string;
+  "--idle-float-duration"?: string;
+  "--idle-breathe-duration"?: string;
+  "--idle-drift-duration"?: string;
+  "--idle-sway-duration"?: string;
+};
+
+type ResizeStart = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  cropLeft?: number;
+  cropTop?: number;
+  cropRight?: number;
+  cropBottom?: number;
+};
+
+type DragStart = {
+  id: string;
+  x: number;
+  y: number;
+};
+
+type GroupTransformStart = Array<{
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  type: CanvasItemType;
+  cropLeft?: number;
+  cropTop?: number;
+  cropRight?: number;
+  cropBottom?: number;
+}>;
+
+function round(value: number) {
+  return Number(value.toFixed(2));
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampPosition(value: number) {
+  return round(clamp(value, MIN_POSITION, MAX_POSITION));
+}
+
+function clampSize(value: number) {
+  return round(clamp(value, MIN_ITEM_SIZE, MAX_ITEM_SIZE));
+}
+
+function clampFontSize(value: number) {
+  return round(clamp(value, MIN_FONT_SIZE, MAX_FONT_SIZE));
+}
+
+function itemTransform(item: Pick<CanvasItem, "x" | "y" | "rotate">) {
+  return `translate3d(${item.x}px, ${item.y}px, 0) rotate(${item.rotate}deg)`;
+}
+
+function getEffectiveItem(item: CanvasItem, mobileView: boolean): CanvasItem {
+  if (!mobileView || !item.mobile) {
+    return item;
+  }
+
+  const effective = {
+    ...item,
+    x: item.mobile.x ?? item.x,
+    y: item.mobile.y ?? item.y,
+    width: item.mobile.width ?? item.width,
+    height: item.mobile.height ?? item.height,
+    fontSize: item.mobile.fontSize ?? item.fontSize,
+  };
+
+  return isBackIndexLink(item) ? { ...effective, x: 275, y: 54, fontSize: 13 } : effective;
+}
+
+function toMobileOverride(item: CanvasItem): CanvasItemMobileOverride {
+  const sizeScale = 0.55;
+  const yScale = 0.55;
+  const centerRatio = ((item.x + item.width / 2) / ARTBOARD_WIDTH - 0.5) * 2;
+  const baseWidth = Math.max(1, Math.round(item.width * sizeScale));
+  const baseHeight = item.height === undefined ? undefined : Math.max(1, Math.round(item.height * sizeScale));
+  const width = baseWidth;
+  const height = baseHeight;
+  const compressedCenter = MOBILE_ARTBOARD_WIDTH / 2 + centerRatio * MOBILE_ARTBOARD_WIDTH * 0.38;
+  const x = Math.round(clamp(compressedCenter - baseWidth / 2, -baseWidth * 0.45, MOBILE_ARTBOARD_WIDTH - baseWidth * 0.55));
+
+  return {
+    x: isBackIndexLink(item) ? 275 : x,
+    y: isBackIndexLink(item) ? 54 : Math.round(item.y * yScale),
+    width,
+    height,
+    fontSize: isBackIndexLink(item) ? 13 : isDeviceFontItem(item) && item.fontSize !== undefined ? clampFontSize(Math.round(item.fontSize * 0.7)) : undefined,
+  };
+}
+
+const mobileOverrideFields = new Set<keyof CanvasItem>(["x", "y", "width", "height"]);
+
+function mergeItemUpdates(item: CanvasItem, updates: Partial<CanvasItem>, mobileView: boolean, mobileResizeFont = false) {
+  if (item.type === "audio" && typeof updates.fontSize === "number") {
+    const currentWidth = updates.width ?? (mobileView ? item.mobile?.width ?? item.width : item.width);
+    const currentHeight = updates.height ?? (mobileView ? item.mobile?.height ?? item.height : item.height);
+    const minWidth = updates.fontSize * 22;
+    const minHeight = updates.fontSize * 6.2;
+
+    updates = {
+      ...updates,
+      width: clampSize(Math.max(currentWidth ?? 0, minWidth)),
+      height: clampSize(Math.max(currentHeight ?? 0, minHeight)),
+    };
+  }
+
+  if (!mobileView) {
+    return { ...item, ...updates };
+  }
+
+  const sharedUpdates: Partial<CanvasItem> = {};
+  const mobileUpdates: CanvasItemMobileOverride = {};
+
+  for (const [key, value] of Object.entries(updates) as [keyof CanvasItem, CanvasItem[keyof CanvasItem]][]) {
+    const fontSizeIsMobile = key === "fontSize" && (mobileResizeFont || isDeviceFontItem(item));
+    if (!mobileOverrideFields.has(key) && !fontSizeIsMobile) {
+      (sharedUpdates as Record<string, unknown>)[key] = value;
+      continue;
+    }
+
+    if (key === "x") {
+      mobileUpdates.x = value as number | undefined;
+    } else if (key === "y") {
+      mobileUpdates.y = value as number | undefined;
+    } else if (key === "width") {
+      mobileUpdates.width = value as number | undefined;
+    } else if (key === "height") {
+      mobileUpdates.height = value as number | undefined;
+    } else if (key === "fontSize") {
+      mobileUpdates.fontSize = value as number | undefined;
+    }
+  }
+
+  return { ...item, ...sharedUpdates, mobile: { ...item.mobile, ...mobileUpdates } };
+}
+
+function isTextLike(item: Pick<CanvasItem, "type">) {
+  return item.type === "text" || item.type === "link" || item.type === "symbol";
+}
+
+function isDeviceFontItem(item: Pick<CanvasItem, "type">) {
+  return isTextLike(item) || item.type === "audio";
+}
+
+function isBackIndexLink(item: Pick<CanvasItem, "href" | "text">) {
+  return item.href === "/" && typeof item.text === "string" && item.text.toLowerCase().startsWith("back /");
+}
+
+function getHoverEffectClass(item: CanvasItem) {
+  const effect = item.hoverEffect === "shock" || item.hoverEffect === "float" || item.hoverEffect === "tilt" || item.hoverEffect === "drift" ? "lift" : item.hoverEffect ?? "none";
+
+  if (effect === "color" || effect === "lift" || effect === "glow" || effect === "focus") {
+    return `canvas-item-hover-${effect}`;
+  }
+
+  return "";
+}
+
+function getHoverStyleVars(_item: CanvasItem): CanvasItemStyle {
+  return {
+    "--hover-lift-y": "-5.6px",
+    "--hover-scale": "1.018",
+    "--hover-tilt": "1.8deg",
+    "--hover-float-x": "2.4px",
+    "--hover-float-y": "-3.6px",
+    "--hover-glow": "8px",
+    "--hover-focus": "1.05",
+    "--hover-focus-blur": "5px",
+  };
+}
+
+function getIdleEffectClass(item: CanvasItem) {
+  const effect = item.idleEffect === "pulse" ? "breathe" : item.idleEffect ?? "none";
+
+  if (effect === "float" || effect === "breathe" || effect === "drift" || effect === "sway") {
+    return `canvas-item-idle-${effect}`;
+  }
+
+  return "";
+}
+
+function getIdleStyleVars(item: CanvasItem): CanvasItemStyle {
+  const strength = Math.min(Math.max(item.idleStrength ?? 3, 0), 12);
+
+  return {
+    "--idle-strength": `${strength}`,
+    "--idle-float-y": "-15px",
+    "--idle-breathe-scale": "1.08",
+    "--idle-drift-x": "13px",
+    "--idle-drift-y": "-10px",
+    "--idle-drift-rotate": "1.35deg",
+    "--idle-sway-rotate": "3deg",
+    "--idle-float-duration": `${5.5 * 3 / Math.max(strength, 0.25)}s`,
+    "--idle-breathe-duration": `${4.8 * 3 / Math.max(strength, 0.25)}s`,
+    "--idle-drift-duration": `${10 * 3 / Math.max(strength, 0.25)}s`,
+    "--idle-sway-duration": `${5.8 * 3 / Math.max(strength, 0.25)}s`,
+  };
+}
+
+function getCropUpdates(start: ResizeStart, dist: number[], scale: number, direction?: number[]) {
+  const distX = (dist[0] ?? 0) / scale;
+  const distY = (dist[1] ?? 0) / scale;
+  const widthDelta = (distX / Math.max(start.width, 1)) * 100;
+  const heightDelta = (distY / Math.max(start.height, 1)) * 100;
+  const left = start.cropLeft ?? 0;
+  const top = start.cropTop ?? 0;
+  const right = start.cropRight ?? 0;
+  const bottom = start.cropBottom ?? 0;
+
+  return {
+    cropLeft: direction?.[0] === -1 ? clampCrop(left + widthDelta, right) : left,
+    cropRight: direction?.[0] === 1 ? clampCrop(right - widthDelta, left) : right,
+    cropTop: direction?.[1] === -1 ? clampCrop(top + heightDelta, bottom) : top,
+    cropBottom: direction?.[1] === 1 ? clampCrop(bottom - heightDelta, top) : bottom,
+  };
+}
+
+function clampCrop(value: number, opposite = 0) {
+  return Math.min(Math.max(round(value), 0), Math.min(80, 90 - opposite));
+}
+
+function applyImageCropStyle(target: HTMLElement | SVGElement, updates: ReturnType<typeof getCropUpdates>) {
+  const cropTarget = target.querySelector(".canvas-image-fill, .canvas-svg-image-fill");
+
+  if (!(cropTarget instanceof HTMLElement)) {
+    return;
+  }
+
+  const width = Math.max(1, 100 - (updates.cropLeft ?? 0) - (updates.cropRight ?? 0));
+  const height = Math.max(1, 100 - (updates.cropTop ?? 0) - (updates.cropBottom ?? 0));
+  cropTarget.style.width = `${10000 / width}%`;
+  cropTarget.style.height = `${10000 / height}%`;
+  cropTarget.style.transform = `translate(${(-100 * (updates.cropLeft ?? 0)) / width}%, ${(-100 * (updates.cropTop ?? 0)) / height}%)`;
+}
+
+function needsMobileOverride(item: CanvasItem) {
+  return (
+    !item.mobile ||
+    (isDeviceFontItem(item) && item.fontSize !== undefined && item.mobile.fontSize === undefined) ||
+    (item.type === "audio" && (item.mobile.width === undefined || (item.height !== undefined && item.mobile.height === undefined)))
+  );
+}
+
+function withMissingMobileOverride(item: CanvasItem) {
+  const mobile = toMobileOverride(item);
+  return { ...item, mobile: { ...mobile, ...item.mobile } };
+}
+
+function isSafeEmbedText(text?: string) {
+  const value = text?.trim();
+  const iframeMatch = value?.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+  const rawSrc = iframeMatch?.[1] ?? value;
+
+  if (!rawSrc) {
+    return false;
+  }
+
+  try {
+    const url = new URL(rawSrc);
+    return (
+      url.hostname === "youtu.be" ||
+      url.hostname.endsWith("youtube.com") ||
+      url.hostname.endsWith("vimeo.com") ||
+      (url.hostname.endsWith("spotify.com") && url.pathname.startsWith("/embed/")) ||
+      (url.hostname.endsWith("soundcloud.com") && url.pathname.includes("/player/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function estimateTextBoxSize(text: string, fontSize: number) {
+  return {
+    width: clampSize(Math.ceil(text.length * fontSize * 0.58 + 8)),
+    height: clampSize(Math.ceil(fontSize * 1.08 + 6)),
+  };
+}
+
+function measureNaturalText(textNode: HTMLElement) {
+  const clone = textNode.cloneNode(true) as HTMLElement;
+  clone.removeAttribute("contenteditable");
+  clone.style.position = "absolute";
+  clone.style.visibility = "hidden";
+  clone.style.pointerEvents = "none";
+  clone.style.left = "-10000px";
+  clone.style.top = "-10000px";
+  clone.style.width = "max-content";
+  clone.style.maxWidth = "none";
+  clone.style.height = "auto";
+  document.body.appendChild(clone);
+  const rect = clone.getBoundingClientRect();
+  clone.remove();
+  return rect;
+}
+
+function isTypingTarget(event: KeyboardEvent) {
+  const target = event.target;
+
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']"));
+}
+
+function defaultLayer(type: CanvasItemType, id: string) {
+  if (id === "title") {
+    return 3;
+  }
+
+  if (type === "audio") {
+    return 2;
+  }
+
+  if (type === "image" || type === "video") {
+    return 1;
+  }
+
+  return 2;
+}
+
+function defaultItem(type: CanvasItemType, count: number): CanvasItem {
+  const id = `${type}-${Date.now()}-${count}`;
+  const defaultText = type === "link" ? "new link" : type === "symbol" ? "*" : "new text";
+  const fontSize = type === "symbol" ? 32 : type === "audio" ? 16 : 24;
+  const textSize = isTextLike({ type }) ? estimateTextBoxSize(defaultText, fontSize) : undefined;
+  const base = {
+    id,
+    type,
+    x: 180 + count * 18,
+    y: 180 + count * 18,
+    width: textSize?.width ?? (type === "video" ? 320 : type === "audio" ? 340 : 260),
+    height: textSize?.height ?? (type === "image" || type === "video" ? 180 : type === "audio" ? 82 : undefined),
+    rotate: 0,
+    zIndex: defaultLayer(type, id),
+    opacity: 1,
+    locked: false,
+    fontSize,
+    fontWeight: 600,
+    fontFamily: type === "symbol" || type === "link" || type === "audio" ? "mono" : "body",
+    color: "#111111",
+    autoFitText: textSize ? true : undefined,
+  } satisfies CanvasItem;
+
+  if (type === "image") {
+    return { ...base, src: "/images/default-image.png" };
+  }
+
+  if (type === "video") {
+    return { ...base, src: "" };
+  }
+
+  if (type === "audio") {
+    return { ...base, src: "", title: "untitled audio" };
+  }
+
+  if (type === "link") {
+    return { ...base, text: defaultText, href: "/" };
+  }
+
+  if (type === "symbol") {
+    return { ...base, text: defaultText };
+  }
+
+  return { ...base, text: defaultText };
+}
+
+function isShapeAsset(asset: AssetFile) {
+  return asset.kind === "image" && asset.src.startsWith("/shapes/");
+}
+
+function getImageNaturalSize(src: string) {
+  return new Promise<{ width: number; height: number } | null>((resolve) => {
+    if (typeof window === "undefined") {
+      resolve(null);
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth && image.naturalHeight) {
+        resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      } else {
+        resolve(null);
+      }
+    };
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+}
+
+function fitShapeDefaultSize(size: { width: number; height: number } | null) {
+  const max = 180;
+
+  if (!size || !size.width || !size.height) {
+    return { width: max, height: max };
+  }
+
+  const ratio = size.width / size.height;
+
+  if (ratio >= 1) {
+    return {
+      width: max,
+      height: Math.max(1, Math.round(max / ratio)),
+    };
+  }
+
+  return {
+    width: Math.max(1, Math.round(max * ratio)),
+    height: max,
+  };
+}
+
+function shouldOpenBackgroundOnLoad() {
+  return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("background") === "1";
+}
+
+export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
+  const openBackgroundOnLoad = shouldOpenBackgroundOnLoad();
+  const [canvas, setCanvas] = useState(initialCanvas);
+  const [past, setPast] = useState<CanvasDocument[]>([]);
+  const [future, setFuture] = useState<CanvasDocument[]>([]);
+  const [selectedId, setSelectedId] = useState<string | undefined>(() => (openBackgroundOnLoad ? undefined : initialCanvas.items[0]?.id));
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => (openBackgroundOnLoad || !initialCanvas.items[0]?.id ? [] : [initialCanvas.items[0].id]));
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [pickerKind, setPickerKind] = useState<AssetKind | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<"item" | "background">("item");
+  const [editorWarning, setEditorWarning] = useState("");
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(openBackgroundOnLoad);
+  const [mobileView, setMobileView] = useState(() => (typeof window !== "undefined" ? window.localStorage.getItem(EDITOR_VIEW_MODE_KEY) === "mobile" : false));
+  const [viewportSize, setViewportSize] = useState(() =>
+    typeof window === "undefined" ? { width: 0, height: 0 } : { width: window.innerWidth, height: window.innerHeight },
+  );
+  const [editingTextId, setEditingTextId] = useState<string | undefined>();
+  const [selectedTarget, setSelectedTarget] = useState<HTMLDivElement | null>(null);
+  const [selectedTargets, setSelectedTargets] = useState<HTMLDivElement[]>([]);
+  const refs = useRef<Record<string, HTMLDivElement | null>>({});
+  const artboardRef = useRef<HTMLDivElement | null>(null);
+  const moveableRef = useRef<Moveable>(null);
+  const canvasRef = useRef(canvas);
+  const transformStartRef = useRef<CanvasDocument | null>(null);
+  const transformDraftRef = useRef<Partial<CanvasItem> | null>(null);
+  const groupDraftRef = useRef<Record<string, Partial<CanvasItem>> | null>(null);
+  const groupTransformStartRef = useRef<GroupTransformStart | null>(null);
+  const dragStartRef = useRef<DragStart | null>(null);
+  const resizeStartRef = useRef<ResizeStart | null>(null);
+  const hasMountedRef = useRef(false);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const lastSavedJsonRef = useRef(JSON.stringify(initialCanvas));
+  const selectedIdRef = useRef(selectedId);
+  const selectedIdsRef = useRef(selectedIds);
+  const artboardWidth = mobileView ? MOBILE_ARTBOARD_WIDTH : ARTBOARD_WIDTH;
+  const artboardHeight = mobileView ? canvas.mobileHeight ?? MOBILE_ARTBOARD_HEIGHT : canvas.height;
+  const mobileFitScale =
+    viewportSize.width && viewportSize.height
+      ? Math.min(1, Math.max(0.2, Math.min((viewportSize.width - 24) / MOBILE_ARTBOARD_WIDTH, (viewportSize.height - 24) / MOBILE_ARTBOARD_HEIGHT)))
+      : 1;
+  const editorScale = mobileView ? mobileFitScale : scale;
+  const effectiveItems = useMemo(() => canvas.items.map((item) => getEffectiveItem(item, mobileView)), [canvas.items, mobileView]);
+  const selectedItem = useMemo(() => effectiveItems.find((item) => item.id === selectedId), [effectiveItems, selectedId]);
+  const selectedItems = useMemo(() => effectiveItems.filter((item) => selectedIds.includes(item.id)), [effectiveItems, selectedIds]);
+  const selectedTextLike = Boolean(selectedItem && isTextLike(selectedItem));
+  const renderDirections = selectedTextLike || selectedItem?.type === "audio" ? ["nw", "ne", "sw", "se", "w", "e"] : undefined;
+  const moveableTarget = selectedIds.length > 1 ? selectedTargets : selectedTarget;
+  const groupSelected = Array.isArray(moveableTarget);
+  const moveableKey = `${selectedItem?.id ?? "none"}-${selectedItem?.type ?? "none"}-${selectedIds.join("_")}-${renderDirections?.join("-") ?? "all"}`;
+
+  useEffect(() => {
+    canvasRef.current = canvas;
+  }, [canvas]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EDITOR_VIEW_MODE_KEY, mobileView ? "mobile" : "desktop");
+  }, [mobileView]);
+
+  useEffect(() => {
+    function updateViewportSize() {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    }
+
+    updateViewportSize();
+    window.addEventListener("resize", updateViewportSize);
+    return () => window.removeEventListener("resize", updateViewportSize);
+  }, []);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    selectedIdsRef.current = selectedIds;
+    setEditingTextId((current) => (current && current !== selectedId ? undefined : current));
+    setSelectedTarget(selectedId && selectedIds.length === 1 && !selectedItem?.locked ? refs.current[selectedId] ?? null : null);
+    setSelectedTargets(
+      selectedIds.length > 1
+        ? selectedIds
+            .map((id) => ({ id, node: refs.current[id] }))
+            .filter(({ id, node }) => Boolean(node && !canvasRef.current.items.find((item) => item.id === id)?.locked))
+            .map(({ node }) => node as HTMLDivElement)
+        : [],
+    );
+  }, [selectedId, selectedIds, selectedItem?.locked]);
+
+  useEffect(() => {
+    setSelectedTarget(selectedId && selectedIds.length === 1 && !selectedItem?.locked ? refs.current[selectedId] ?? null : null);
+    setSelectedTargets(
+      selectedIds.length > 1
+        ? selectedIds
+            .map((id) => ({ id, node: refs.current[id] }))
+            .filter(({ id, node }) => Boolean(node && !canvas.items.find((item) => item.id === id)?.locked))
+            .map(({ node }) => node as HTMLDivElement)
+        : [],
+    );
+  }, [canvas.items, selectedId, selectedIds, selectedItem?.locked]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      moveableRef.current?.updateRect();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedTarget, selectedTargets]);
+
+  const markDirty = useCallback(() => {
+    setSaveState("idle");
+  }, []);
+
+  const pushPast = useCallback((previous: CanvasDocument) => {
+    setPast((current) => [...current.slice(-(HISTORY_LIMIT - 1)), previous]);
+    setFuture([]);
+  }, []);
+
+  const commitCanvas = useCallback(
+    (nextCanvas: CanvasDocument) => {
+      pushPast(canvasRef.current);
+      setCanvas(nextCanvas);
+      markDirty();
+    },
+    [markDirty, pushPast],
+  );
+
+  useEffect(() => {
+    if (!mobileView || !canvasRef.current.items.some(needsMobileOverride)) {
+      return;
+    }
+
+    commitCanvas({
+      ...canvasRef.current,
+      mobileHeight: canvasRef.current.mobileHeight ?? MOBILE_ARTBOARD_HEIGHT,
+      items: canvasRef.current.items.map((item) => (needsMobileOverride(item) ? withMissingMobileOverride(item) : item)),
+    });
+  }, [commitCanvas, mobileView]);
+
+  const setCanvasLive = useCallback(
+    (nextCanvas: CanvasDocument) => {
+      canvasRef.current = nextCanvas;
+      setCanvas(nextCanvas);
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  const updateItem = useCallback(
+    (id: string, updates: Partial<CanvasItem>, commit = true) => {
+      const nextCanvas = {
+        ...canvasRef.current,
+        items: canvasRef.current.items.map((item) => (item.id === id ? mergeItemUpdates(item, updates, mobileView) : item)),
+      };
+
+      if (commit) {
+        commitCanvas(nextCanvas);
+      } else {
+        setCanvasLive(nextCanvas);
+      }
+    },
+    [commitCanvas, mobileView, setCanvasLive],
+  );
+
+  const updateSelected = useCallback(
+    (updates: Partial<CanvasItem>) => {
+      const ids = selectedIdsRef.current.length ? selectedIdsRef.current : selectedIdRef.current ? [selectedIdRef.current] : [];
+
+      if (!ids.length) {
+        return;
+      }
+
+      commitCanvas({
+        ...canvasRef.current,
+        items: canvasRef.current.items.map((item) => (ids.includes(item.id) ? mergeItemUpdates(item, updates, mobileView) : item)),
+      });
+    },
+    [commitCanvas, mobileView],
+  );
+
+  const undo = useCallback(() => {
+    setPast((currentPast) => {
+      const previous = currentPast.at(-1);
+
+      if (!previous) {
+        return currentPast;
+      }
+
+      setFuture((currentFuture) => [canvasRef.current, ...currentFuture].slice(0, HISTORY_LIMIT));
+      setCanvas(previous);
+      setSaveState("idle");
+      return currentPast.slice(0, -1);
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setFuture((currentFuture) => {
+      const next = currentFuture[0];
+
+      if (!next) {
+        return currentFuture;
+      }
+
+      setPast((currentPast) => [...currentPast.slice(-(HISTORY_LIMIT - 1)), canvasRef.current]);
+      setCanvas(next);
+      setSaveState("idle");
+      return currentFuture.slice(1);
+    });
+  }, []);
+
+  const duplicateSelected = useCallback(() => {
+    const ids = selectedIdsRef.current.length ? selectedIdsRef.current : selectedIdRef.current ? [selectedIdRef.current] : [];
+    const selected = canvasRef.current.items.filter((item) => ids.includes(item.id));
+
+    if (!selected.length) {
+      return;
+    }
+
+    const stamp = Date.now();
+    const duplicates = selected.map((item) => ({
+      ...item,
+      id: `${item.id}-copy-${stamp}`,
+      x: item.x + 30,
+      y: item.y + 30,
+      zIndex: item.zIndex + 1,
+    }));
+    const nextCanvas = { ...canvasRef.current, items: [...canvasRef.current.items, ...duplicates] };
+
+    commitCanvas(nextCanvas);
+    setSelectedId(duplicates[0]?.id);
+    setSelectedIds(duplicates.map((item) => item.id));
+  }, [commitCanvas]);
+
+  const deleteSelected = useCallback(() => {
+    const ids = selectedIdsRef.current.length ? selectedIdsRef.current : selectedIdRef.current ? [selectedIdRef.current] : [];
+
+    if (!ids.length) {
+      return;
+    }
+
+    commitCanvas({ ...canvasRef.current, items: canvasRef.current.items.filter((item) => !ids.includes(item.id)) });
+    setSelectedId(undefined);
+    setSelectedIds([]);
+  }, [commitCanvas]);
+
+  const saveCanvas = useCallback(async (nextCanvas = canvasRef.current) => {
+    setSaveState("saving");
+
+    try {
+      const nextJson = JSON.stringify(nextCanvas);
+      const response = await fetch("/api/dev-save-canvas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: nextCanvas.slug, canvas: nextCanvas }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Save failed");
+      }
+
+      lastSavedJsonRef.current = nextJson;
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    if (!canSave) {
+      return;
+    }
+
+    const nextJson = JSON.stringify(canvas);
+    if (nextJson === lastSavedJsonRef.current) {
+      return;
+    }
+
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      if (JSON.stringify(canvas) === lastSavedJsonRef.current) {
+        return;
+      }
+      void saveCanvas(canvas);
+    }, AUTOSAVE_DELAY);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [canvas, saveCanvas]);
+
+  useEffect(() => {
+    if (!selectedItem || !isTextLike(selectedItem)) {
+      return;
+    }
+
+    if (isSafeEmbedText(selectedItem.text) && editingTextId !== selectedItem.id) {
+      return;
+    }
+
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        const node = refs.current[selectedItem.id];
+        const textNode = node?.querySelector(".canvas-text-content");
+
+        if (!(textNode instanceof HTMLElement)) {
+          return;
+        }
+
+        const fitNatural = selectedItem.autoFitText !== false;
+        const rect = fitNatural ? measureNaturalText(textNode) : textNode.getBoundingClientRect();
+        const nextWidth = fitNatural ? clampSize(Math.ceil(rect.width + 2)) : selectedItem.width;
+        const measuredHeight = clampSize(Math.ceil((fitNatural ? rect.height : textNode.scrollHeight) + 2));
+        const nextHeight = measuredHeight;
+
+        if (Math.abs(nextWidth - selectedItem.width) <= 1 && Math.abs(nextHeight - (selectedItem.height ?? 0)) <= 1) {
+          return;
+        }
+
+        updateItem(selectedItem.id, fitNatural ? { width: nextWidth, height: nextHeight } : { height: nextHeight }, false);
+        window.requestAnimationFrame(() => {
+          moveableRef.current?.updateRect();
+        });
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    selectedItem?.id,
+    selectedItem?.text,
+    selectedItem?.width,
+    selectedItem?.height,
+    selectedItem?.fontSize,
+    selectedItem?.fontWeight,
+    selectedItem?.fontFamily,
+    selectedItem?.autoFitText,
+    editingTextId,
+    updateItem,
+  ]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const modifier = event.metaKey || event.ctrlKey;
+      const typing = isTypingTarget(event);
+
+      if (typing && !(modifier && event.key.toLowerCase() === "s")) {
+        if (event.key === "Escape") {
+          setEditingTextId(undefined);
+        }
+        return;
+      }
+
+      if (event.key === "Escape") {
+        setEditingTextId(undefined);
+        return;
+      }
+
+      if (event.key === "Enter") {
+        const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+        const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+
+        if (selected && isTextLike(selected)) {
+          event.preventDefault();
+          setEditingTextId(selected.id);
+        }
+        return;
+      }
+
+      if (modifier && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveCanvas();
+        return;
+      }
+
+      if (modifier && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        duplicateSelected();
+        return;
+      }
+
+      if (modifier && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+
+      if (modifier && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        deleteSelected();
+        return;
+      }
+
+      const nudgeKeys: Record<string, [number, number]> = {
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+      };
+      const nudge = nudgeKeys[event.key];
+
+      if (nudge) {
+        const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+        const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+
+        if (!selected) {
+          return;
+        }
+
+        event.preventDefault();
+        const amount = event.shiftKey ? 10 : 1;
+        updateItem(selected.id, { x: selected.x + nudge[0] * amount, y: selected.y + nudge[1] * amount });
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deleteSelected, duplicateSelected, mobileView, redo, saveCanvas, undo, updateItem]);
+
+  function addItem(type: CanvasItemType) {
+    if (type === "image" || type === "video" || type === "audio") {
+      setPickerTarget("item");
+      setPickerKind(type === "image" ? "images" : type === "video" ? "videos" : "audio");
+      return;
+    }
+
+    const item = placeNewItem(defaultItem(type, canvasRef.current.items.length));
+    commitCanvas({ ...canvasRef.current, items: [...canvasRef.current.items, item] });
+    setSelectedId(item.id);
+    setSelectedIds([item.id]);
+    setBackgroundInspectorOpen(false);
+    setInspectorCollapsed(false);
+  }
+
+  async function addMediaItem(asset: AssetFile) {
+    const type = asset.kind;
+    const shapeSize = isShapeAsset(asset) ? fitShapeDefaultSize(await getImageNaturalSize(asset.src)) : {};
+    const baseItem = {
+      ...defaultItem(type, canvasRef.current.items.length),
+      ...shapeSize,
+      src: asset.src,
+      title: type === "audio" ? asset.name.replace(/\.[^.]+$/, "") : undefined,
+      caption: asset.warning,
+      recolorColor: type === "image" && asset.src.startsWith("/shapes/") ? "#111111" : undefined,
+      recolorIntensity: type === "image" && asset.src.startsWith("/shapes/") ? 100 : undefined,
+    };
+    const item = placeNewItem(baseItem);
+
+    commitCanvas({ ...canvasRef.current, items: [...canvasRef.current.items, item] });
+    setSelectedId(item.id);
+    setSelectedIds([item.id]);
+    setBackgroundInspectorOpen(false);
+    setInspectorCollapsed(false);
+    setEditorWarning(asset.warning ?? "");
+    setPickerKind(null);
+  }
+
+  function setBackgroundImageFromAsset(asset: AssetFile) {
+    updateBackground({ backgroundImage: asset.src });
+    setBackgroundInspectorOpen(true);
+    setInspectorCollapsed(false);
+    setPickerKind(null);
+  }
+
+  function onPickerSelect(asset: AssetFile) {
+    if (pickerTarget === "background") {
+      setBackgroundImageFromAsset(asset);
+      return;
+    }
+
+    addMediaItem(asset);
+  }
+
+  function openBackgroundImagePicker() {
+    setPickerTarget("background");
+    setPickerKind("images");
+  }
+
+  function updateBackground(updates: Partial<Pick<CanvasDocument, "backgroundColor" | "height" | "mobileHeight" | "backgroundImage" | "backgroundImageOpacity" | "backgroundImageFit" | "backgroundImageRecolorColor" | "backgroundImageRecolorIntensity" | "password">>) {
+    commitCanvas({ ...canvasRef.current, ...updates });
+  }
+
+  function openRealPage() {
+    const baseUrl = canvasRef.current.slug === "home" || canvasRef.current.slug === "index" ? "/" : `/${canvasRef.current.slug}`;
+    const url = mobileView ? `${baseUrl}?view=mobile` : baseUrl;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function toggleMobileView() {
+    setMobileView((current) => !current);
+  }
+
+  function getSpawnPosition(item: Pick<CanvasItem, "width" | "height">) {
+    const count = canvasRef.current.items.length;
+    const fallback = { x: 180 + count * 18, y: 180 + count * 18 };
+    const rect = artboardRef.current?.getBoundingClientRect();
+
+    if (!rect) {
+      return fallback;
+    }
+
+    const clientX = clamp(window.innerWidth * 0.34, 24, window.innerWidth - 24);
+    const clientY = clamp(window.innerHeight * 0.24, 72, window.innerHeight - 24);
+    const stagger = (count % 6) * 18;
+    const x = (clientX - rect.left) / editorScale + stagger;
+    const y = (clientY - rect.top) / editorScale + stagger;
+
+    return {
+      x: clampPosition(clamp(x, -((item.width ?? 0) * 0.35), artboardWidth - Math.min(40, item.width ?? 40))),
+      y: clampPosition(clamp(y, 0, artboardHeight - Math.min(40, item.height ?? 40))),
+    };
+  }
+
+  function placeNewItem(baseItem: CanvasItem) {
+    const spawn = getSpawnPosition(baseItem);
+    const positioned = { ...baseItem, ...spawn };
+
+    if (!mobileView) {
+      return positioned;
+    }
+
+    return { ...positioned, mobile: { ...toMobileOverride(positioned), ...spawn } };
+  }
+
+  function commitTransformHistory() {
+    if (groupTransformStartRef.current) {
+      commitGroupTransformHistory();
+      return;
+    }
+
+    const previous = transformStartRef.current;
+    const draft = transformDraftRef.current;
+    transformStartRef.current = null;
+    transformDraftRef.current = null;
+    dragStartRef.current = null;
+    resizeStartRef.current = null;
+
+    if (!previous || !draft || !selectedIdRef.current) {
+      return;
+    }
+
+    const nextCanvas = {
+      ...canvasRef.current,
+      items: canvasRef.current.items.map((item) =>
+        item.id === selectedIdRef.current ? mergeItemUpdates(item, draft, mobileView, Boolean(draft.fontSize !== undefined && (draft.width !== undefined || draft.height !== undefined))) : item,
+      ),
+    };
+
+    if (JSON.stringify(previous) === JSON.stringify(nextCanvas)) {
+      return;
+    }
+
+    pushPast(previous);
+    setCanvas(nextCanvas);
+    markDirty();
+  }
+
+  function commitGroupTransformHistory() {
+    const previous = transformStartRef.current;
+    const groupStart = groupTransformStartRef.current;
+    const nextCanvas = canvasRef.current;
+    transformStartRef.current = null;
+    groupDraftRef.current = null;
+    groupTransformStartRef.current = null;
+    dragStartRef.current = null;
+
+    if (!previous || !groupStart?.length) {
+      return;
+    }
+
+    if (JSON.stringify(previous) === JSON.stringify(nextCanvas)) {
+      return;
+    }
+
+    pushPast(previous);
+    setCanvas(nextCanvas);
+    markDirty();
+  }
+
+  function beginTransform() {
+    transformStartRef.current = canvasRef.current;
+    transformDraftRef.current = null;
+    groupDraftRef.current = null;
+    groupTransformStartRef.current = null;
+    dragStartRef.current = null;
+  }
+
+  function beginDrag() {
+    beginTransform();
+    const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+    const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+    dragStartRef.current = selected ? { id: selected.id, x: selected.x, y: selected.y } : null;
+  }
+
+  function beginGroupTransform() {
+    beginTransform();
+    groupTransformStartRef.current = selectedIdsRef.current
+      .map((id) => canvasRef.current.items.find((item) => item.id === id))
+      .filter((item): item is CanvasItem => Boolean(item && !item.locked))
+      .map((item) => {
+        const effective = getEffectiveItem(item, mobileView);
+        return {
+          id: effective.id,
+          x: effective.x,
+          y: effective.y,
+          width: effective.width,
+          height: effective.height ?? effective.width,
+          fontSize: effective.fontSize ?? 24,
+          type: effective.type,
+          cropLeft: effective.cropLeft,
+          cropTop: effective.cropTop,
+          cropRight: effective.cropRight,
+          cropBottom: effective.cropBottom,
+        };
+      });
+  }
+
+  function beginResize() {
+    beginTransform();
+    const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+    const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+    resizeStartRef.current = selected
+      ? {
+          id: selected.id,
+          x: selected.x,
+          y: selected.y,
+          width: selected.width,
+          height: selected.height ?? selected.width,
+          fontSize: selected.fontSize ?? 24,
+          cropLeft: selected.cropLeft,
+          cropTop: selected.cropTop,
+          cropRight: selected.cropRight,
+          cropBottom: selected.cropBottom,
+        }
+      : null;
+  }
+
+  function setLiveTargetTransform(target: HTMLElement | SVGElement, updates: Partial<CanvasItem>) {
+    const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+    const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+
+    if (!selected) {
+      return;
+    }
+
+    const next = { ...selected, ...updates };
+    target.style.transform = itemTransform(next);
+    transformDraftRef.current = { ...transformDraftRef.current, ...updates };
+  }
+
+  function getTargetItemId(target: HTMLElement | SVGElement) {
+    return target instanceof HTMLElement ? target.dataset.canvasItemId : undefined;
+  }
+
+  function setLiveGroupTargetTransform(target: HTMLElement | SVGElement, updates: Partial<CanvasItem>) {
+    const id = getTargetItemId(target);
+    const root = id ? canvasRef.current.items.find((item) => item.id === id) : undefined;
+    const selected = root ? getEffectiveItem(root, mobileView) : undefined;
+
+    if (!id || !selected || root?.locked) {
+      return;
+    }
+
+    const next = { ...selected, ...updates };
+    target.style.transform = itemTransform(next);
+
+    if (updates.width !== undefined) {
+      target.style.width = `${updates.width}px`;
+    }
+
+    if (updates.height !== undefined) {
+      target.style.height = `${updates.height}px`;
+    }
+
+    if (updates.fontSize !== undefined) {
+      target.style.fontSize = `${updates.fontSize}px`;
+      const textNode = target.querySelector(".canvas-text-content");
+      const audioPlayer = target.querySelector(".ascii-audio-player");
+      if (textNode instanceof HTMLElement) {
+        textNode.style.fontSize = `${updates.fontSize}px`;
+      }
+      if (audioPlayer instanceof HTMLElement) {
+        audioPlayer.style.fontSize = `${updates.fontSize}px`;
+      }
+    }
+
+    groupDraftRef.current = { ...groupDraftRef.current, [id]: { ...groupDraftRef.current?.[id], ...updates } };
+  }
+
+  function applyGroupDraftLive() {
+    const draft = groupDraftRef.current;
+
+    if (!draft || !Object.keys(draft).length) {
+      return;
+    }
+
+    setCanvasLive({
+      ...canvasRef.current,
+      items: canvasRef.current.items.map((item) =>
+        draft[item.id] && !item.locked
+          ? mergeItemUpdates(item, draft[item.id], mobileView, Boolean(draft[item.id].fontSize !== undefined && (draft[item.id].width !== undefined || draft[item.id].height !== undefined)))
+          : item,
+      ),
+    });
+  }
+
+  return (
+    <main
+      className={`canvas-shell ${mobileView ? "canvas-editor-mobile-shell" : ""}`}
+      style={{ minHeight: mobileView ? "100dvh" : artboardHeight * editorScale, backgroundColor: mobileView ? undefined : canvas.backgroundColor ?? "#fafaf7" }}
+    >
+      {canvas.backgroundImage ? <div className="canvas-page-background-image" style={getBackgroundImageStyle(canvas)} /> : null}
+      <PageBuilderPanel currentSlug={canvas.slug} />
+      <CanvasToolbar
+        canSave={canSave}
+        saveState={saveState}
+        hasSelection={selectedIds.length > 0}
+        mobileView={mobileView}
+        onAdd={addItem}
+        onView={openRealPage}
+        onToggleMobileView={toggleMobileView}
+        onDuplicate={duplicateSelected}
+        onDelete={deleteSelected}
+        onSave={saveCanvas}
+      />
+      {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
+      <div
+        ref={artboardRef}
+        className={`canvas-artboard ${mobileView ? "canvas-artboard-mobile-editor" : ""}`}
+        style={{
+          width: artboardWidth,
+          height: artboardHeight,
+          left: "50%",
+          transform: `scale(${editorScale}) translateX(-50%)`,
+          transformOrigin: "top left",
+          backgroundColor: canvas.backgroundColor ?? "#fafaf7",
+        }}
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) {
+            if (selectedIdRef.current || editingTextId) {
+              setSelectedId(undefined);
+              setSelectedIds([]);
+              setEditingTextId(undefined);
+              setBackgroundInspectorOpen(false);
+              setInspectorCollapsed(true);
+              return;
+            }
+
+            if (backgroundInspectorOpen) {
+              setBackgroundInspectorOpen(false);
+              setInspectorCollapsed(true);
+              return;
+            }
+
+            setBackgroundInspectorOpen(true);
+            setInspectorCollapsed(false);
+          }
+        }}
+      >
+        {canvas.backgroundImage ? <div className="canvas-background-image" style={getBackgroundImageStyle(canvas)} /> : null}
+        {effectiveItems.map((item) => (
+          <div
+            key={item.id}
+            data-canvas-item-id={item.id}
+            ref={(node) => {
+              refs.current[item.id] = node;
+              if (item.id === selectedIdRef.current && selectedIdsRef.current.length <= 1 && !item.locked) {
+                setSelectedTarget(node);
+              }
+            }}
+            className={[
+              "canvas-item",
+              `canvas-item-type-${item.type}`,
+              selectedIds.includes(item.id) ? "canvas-item-selected" : "",
+              item.locked ? "canvas-locked-ghost" : "",
+              item.hidden ? "canvas-hidden-ghost" : "",
+              item.hidden && item.type === "image" ? "canvas-hidden-ghost-image" : "",
+              getHoverEffectClass(item),
+              getIdleEffectClass(item),
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            style={
+              {
+                width: item.width,
+                height: item.height,
+                zIndex: item.zIndex,
+                transform: itemTransform(item),
+                transformOrigin: "center center",
+                "--parallax-y": "0px",
+                "--fade-delay": `${item.fadeDelay ?? 0}s`,
+                "--hover-color": item.hoverColor ?? item.color ?? "currentColor",
+                ...getHoverStyleVars(item),
+                ...getIdleStyleVars(item),
+              } as CanvasItemStyle
+            }
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              if (item.locked) {
+                return;
+              }
+              const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+              if (additive) {
+                setSelectedIds((current) => {
+                  const next = current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id];
+                  setSelectedId(next[0]);
+                  return next;
+                });
+              } else {
+                setSelectedId(item.id);
+                setSelectedIds([item.id]);
+              }
+              setBackgroundInspectorOpen(false);
+              setInspectorCollapsed(false);
+              if (!isTextLike(item)) {
+                setEditingTextId(undefined);
+              }
+            }}
+            onDoubleClick={(event) => {
+              if (item.locked) {
+                event.stopPropagation();
+                updateItem(item.id, { locked: undefined });
+                return;
+              }
+
+              if (!isTextLike(item)) {
+                return;
+              }
+
+              event.stopPropagation();
+              setSelectedId(item.id);
+              setSelectedIds([item.id]);
+              setBackgroundInspectorOpen(false);
+              setInspectorCollapsed(false);
+              setEditingTextId(item.id);
+            }}
+          >
+            {item.hidden || item.locked ? (
+              <div className="canvas-flag-row">
+                {item.locked ? (
+                  <button
+                    type="button"
+                    className="canvas-locked-label"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      updateItem(item.id, { locked: undefined });
+                    }}
+                  >
+                    locked
+                  </button>
+                ) : null}
+                {item.hidden ? <span className="canvas-hidden-label">hidden</span> : null}
+              </div>
+            ) : null}
+            <div className="canvas-item-position-wrapper">
+              <div className="canvas-item-fade-wrapper">
+                <div className="canvas-item-hover-wrapper">
+                  <div className="canvas-item-idle-wrapper">
+                    <RenderCanvasItem
+                      item={item}
+                      editMode
+                      editing={editingTextId === item.id}
+                      selected={selectedIds.includes(item.id)}
+                      onTextChange={
+                        isTextLike(item)
+                          ? (text) => {
+                              updateItem(item.id, { text }, false);
+                            }
+                          : undefined
+                      }
+                      onTextBlur={() => setEditingTextId(undefined)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+        <Moveable
+          key={moveableKey}
+          ref={moveableRef}
+          target={moveableTarget}
+          draggable={!editingTextId && (groupSelected ? selectedTargets.length > 0 : selectedIds.length === 1 && !selectedItem?.locked)}
+          resizable={groupSelected ? selectedTargets.length > 0 : selectedIds.length === 1 && !selectedItem?.locked}
+          rotatable={!groupSelected && selectedIds.length === 1 && !selectedItem?.locked}
+          origin={false}
+          keepRatio={false}
+          renderDirections={renderDirections}
+          throttleDrag={0}
+          throttleResize={0}
+          throttleRotate={0}
+          zoom={1 / editorScale}
+          onDragStart={() => {
+            beginDrag();
+            resizeStartRef.current = null;
+          }}
+          onDragGroupStart={() => {
+            beginGroupTransform();
+          }}
+          onResizeStart={() => {
+            beginResize();
+          }}
+          onResizeGroupStart={() => {
+            beginGroupTransform();
+          }}
+          onRotateStart={() => {
+            beginTransform();
+            resizeStartRef.current = null;
+          }}
+          onDrag={({ target, dist }) => {
+            const start = dragStartRef.current;
+
+            if (!start) {
+              return;
+            }
+
+            const x = clampPosition(start.x + dist[0] / editorScale);
+            const y = clampPosition(start.y + dist[1] / editorScale);
+
+            setLiveTargetTransform(target, { x, y });
+          }}
+          onDragGroup={({ events }) => {
+            const starts = groupTransformStartRef.current ?? [];
+
+            events.forEach(({ target, dist }) => {
+              const id = getTargetItemId(target);
+              const start = id ? starts.find((item) => item.id === id) : undefined;
+
+              if (!start) {
+                return;
+              }
+
+              setLiveGroupTargetTransform(target, {
+                x: clampPosition(start.x + dist[0] / editorScale),
+                y: clampPosition(start.y + dist[1] / editorScale),
+              });
+            });
+            applyGroupDraftLive();
+          }}
+          onResize={({ target, width, height, drag, inputEvent, direction }) => {
+            const selectedRoot = canvasRef.current.items.find((item) => item.id === selectedIdRef.current);
+            const selected = selectedRoot ? getEffectiveItem(selectedRoot, mobileView) : undefined;
+            const start = resizeStartRef.current;
+            const modifierKey = Boolean(inputEvent && (("ctrlKey" in inputEvent && inputEvent.ctrlKey) || ("metaKey" in inputEvent && inputEvent.metaKey)));
+            const x = start ? clampPosition(start.x + (drag.dist?.[0] ?? 0) / editorScale) : clampPosition(drag.beforeTranslate[0]);
+            const y = start ? clampPosition(start.y + (drag.dist?.[1] ?? 0) / editorScale) : clampPosition(drag.beforeTranslate[1]);
+
+            if (selected && start?.id === selected.id && isTextLike(selected)) {
+              const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
+              const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
+
+              if (!isCornerResize && !isHorizontalResize) {
+                return;
+              }
+
+              const nextWidth = clampSize(width);
+              const textNode = target.querySelector(".canvas-text-content");
+
+              if (isHorizontalResize) {
+                target.style.width = `${nextWidth}px`;
+                target.style.height = `${start.height}px`;
+                setLiveTargetTransform(target, { width: nextWidth, autoFitText: false, x, y });
+                return;
+              }
+
+              const nextHeight = clampSize(height);
+              const widthScale = start.width ? nextWidth / start.width : 1;
+              const nextFontSize = clampFontSize(start.fontSize * widthScale);
+
+              target.style.width = `${nextWidth}px`;
+              target.style.height = `${nextHeight}px`;
+
+              if (textNode instanceof HTMLElement) {
+                textNode.style.fontSize = `${nextFontSize}px`;
+              }
+
+              setLiveTargetTransform(target, { width: nextWidth, height: nextHeight, fontSize: nextFontSize, autoFitText: false, x, y });
+              return;
+            }
+
+            if (selected && start?.id === selected.id && selected.type === "audio") {
+              const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
+              const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
+
+              if ((!isCornerResize && !isHorizontalResize) || !start.width || !start.height) {
+                return;
+              }
+
+              const nextWidth = clampSize(width);
+              const nextHeight = isHorizontalResize ? start.height : clampSize(height);
+
+              target.style.width = `${nextWidth}px`;
+              target.style.height = `${nextHeight}px`;
+              setLiveTargetTransform(target, {
+                width: nextWidth,
+                height: nextHeight,
+                x,
+                y,
+              });
+              return;
+            }
+
+            if (selected && start?.id === selected.id && selected.type === "image" && modifierKey) {
+              const cropUpdates = getCropUpdates(start, drag.dist ?? [0, 0], editorScale, direction);
+              target.style.width = `${start.width}px`;
+              target.style.height = `${start.height}px`;
+              applyImageCropStyle(target, cropUpdates);
+              setLiveTargetTransform(target, { ...cropUpdates, x: start.x, y: start.y, width: start.width, height: start.height });
+              return;
+            }
+
+            let nextWidth = clampSize(width);
+            let nextHeight = clampSize(height);
+            const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
+
+            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && start.width && start.height) {
+              const scale = Math.max(width / start.width, height / start.height);
+              nextWidth = clampSize(start.width * scale);
+              nextHeight = clampSize(start.height * scale);
+            }
+
+            target.style.width = `${nextWidth}px`;
+            target.style.height = `${nextHeight}px`;
+            setLiveTargetTransform(target, {
+              width: nextWidth,
+              height: nextHeight,
+              x,
+              y,
+            });
+          }}
+          onResizeGroup={({ events }) => {
+            const starts = groupTransformStartRef.current ?? [];
+
+            events.forEach(({ target, width, height, drag }) => {
+              const id = getTargetItemId(target);
+              const start = id ? starts.find((item) => item.id === id) : undefined;
+              const nextWidth = clampSize(width);
+              const nextHeight = clampSize(height);
+              const x = start ? clampPosition(start.x + (drag.dist?.[0] ?? 0) / editorScale) : clampPosition(drag.beforeTranslate[0]);
+              const y = start ? clampPosition(start.y + (drag.dist?.[1] ?? 0) / editorScale) : clampPosition(drag.beforeTranslate[1]);
+
+              if (start?.type === "audio" && start.width && start.height) {
+                const audioWidth = clampSize(width);
+                const audioHeight = clampSize(height);
+                setLiveGroupTargetTransform(target, {
+                  width: audioWidth,
+                  height: audioHeight,
+                  x,
+                  y,
+                });
+                return;
+              }
+
+              if (start && (start.type === "text" || start.type === "link" || start.type === "symbol")) {
+                const widthScale = start.width ? nextWidth / start.width : 1;
+                setLiveGroupTargetTransform(target, {
+                  width: nextWidth,
+                  height: nextHeight,
+                  fontSize: clampFontSize(start.fontSize * widthScale),
+                  autoFitText: false,
+                  x,
+                  y,
+                });
+                return;
+              }
+
+              setLiveGroupTargetTransform(target, {
+                width: clampSize(width),
+                height: clampSize(height),
+                x,
+                y,
+              });
+            });
+            applyGroupDraftLive();
+          }}
+          onRotate={({ target, beforeRotate, drag }) => {
+            const updates: Partial<CanvasItem> = { rotate: round(beforeRotate) };
+
+            if (drag?.beforeTranslate) {
+              updates.x = clampPosition(drag.beforeTranslate[0]);
+              updates.y = clampPosition(drag.beforeTranslate[1]);
+            }
+
+            setLiveTargetTransform(target, updates);
+          }}
+          onDragEnd={commitTransformHistory}
+          onDragGroupEnd={commitGroupTransformHistory}
+          onResizeEnd={commitTransformHistory}
+          onResizeGroupEnd={commitGroupTransformHistory}
+          onRotateEnd={commitTransformHistory}
+        />
+      </div>
+      {inspectorCollapsed ? (
+        <button type="button" className="canvas-inspector-collapsed" onClick={() => setInspectorCollapsed(false)}>
+          INSPECTOR{backgroundInspectorOpen ? " / background" : selectedItem ? ` / ${selectedItem.id}` : ""}
+        </button>
+      ) : selectedItem || backgroundInspectorOpen ? (
+        <CanvasInspector
+          item={selectedItem}
+          items={selectedItems}
+          canvas={canvas}
+          backgroundOpen={backgroundInspectorOpen}
+          mobileView={mobileView}
+          onBackgroundPick={openBackgroundImagePicker}
+          onBackgroundChange={updateBackground}
+          onChange={updateSelected}
+          onCollapse={() => setInspectorCollapsed(true)}
+        />
+      ) : null}
+      {pickerKind ? <AssetPicker kind={pickerKind} onClose={() => setPickerKind(null)} onSelect={onPickerSelect} /> : null}
+    </main>
+  );
+}
+
+function getBackgroundImageStyle(canvas: CanvasDocument) {
+  const fit = canvas.backgroundImageFit ?? "cover";
+  const recolorIntensity = Math.min(Math.max(canvas.backgroundImageRecolorIntensity ?? 0, 0), 100) / 100;
+  const recolorColor = canvas.backgroundImageRecolorColor ?? "transparent";
+
+  return {
+    backgroundImage: recolorIntensity > 0 ? `linear-gradient(color-mix(in srgb, ${recolorColor} ${recolorIntensity * 100}%, transparent), color-mix(in srgb, ${recolorColor} ${recolorIntensity * 100}%, transparent)), url("${canvas.backgroundImage}")` : `url("${canvas.backgroundImage}")`,
+    backgroundRepeat: fit === "tile" ? "repeat" : "no-repeat",
+    backgroundPosition: "center",
+    backgroundSize: fit === "stretch" ? "100% 100%" : fit === "tile" ? "auto" : fit,
+    opacity: canvas.backgroundImageOpacity ?? 1,
+    backgroundBlendMode: recolorIntensity > 0 ? "color" : undefined,
+    filter: recolorIntensity > 0 ? `saturate(${1 + recolorIntensity})` : undefined,
+  };
+}
