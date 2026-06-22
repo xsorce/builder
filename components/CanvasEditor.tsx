@@ -111,28 +111,42 @@ function clampFontSize(value: number) {
   return round(clamp(value, MIN_FONT_SIZE, MAX_FONT_SIZE));
 }
 
-function getCornerRatioScale(start: ResizeStart, direction: number[] | undefined, rawWidth: number, rawHeight: number) {
-  const startWidth = Math.max(start.width, 1);
-  const startHeight = Math.max(start.height, 1);
-  const widthDelta = rawWidth - startWidth;
-  const heightDelta = rawHeight - startHeight;
+function getCornerRatioResize(start: ResizeStart, direction: number[] | undefined, rawX: number, rawY: number, rawWidth: number, rawHeight: number) {
+  const dirX = direction?.[0] ?? 0;
+  const dirY = direction?.[1] ?? 0;
 
-  if (!direction?.[0] || !direction?.[1]) {
-    return rawWidth / startWidth;
+  if (!dirX || !dirY || !start.width || !start.height) {
+    return {
+      x: rawX,
+      y: rawY,
+      width: clampSize(rawWidth),
+      height: clampSize(rawHeight),
+      scale: start.width ? rawWidth / start.width : 1,
+    };
   }
 
-  const signedWidthDelta = widthDelta * direction[0];
-  const signedHeightDelta = heightDelta * direction[1];
-  const ratio = startHeight / startWidth;
-  const projectedWidthDelta = (signedWidthDelta + signedHeightDelta / Math.max(ratio, 0.0001)) / 2;
+  const anchorX = dirX === -1 ? start.x + start.width : start.x;
+  const anchorY = dirY === -1 ? start.y + start.height : start.y;
+  const rawCornerX = dirX === -1 ? rawX : rawX + rawWidth;
+  const rawCornerY = dirY === -1 ? rawY : rawY + rawHeight;
+  const axisX = dirX * start.width;
+  const axisY = dirY * start.height;
+  const pointerX = rawCornerX - anchorX;
+  const pointerY = rawCornerY - anchorY;
+  const denominator = axisX * axisX + axisY * axisY || 1;
+  const rawScale = (pointerX * axisX + pointerY * axisY) / denominator;
+  const minScale = Math.max(MIN_ITEM_SIZE / start.width, MIN_ITEM_SIZE / start.height);
+  const maxScale = Math.min(MAX_ITEM_SIZE / start.width, MAX_ITEM_SIZE / start.height);
+  const scale = clamp(rawScale, minScale, maxScale);
+  const nextWidth = clampSize(start.width * scale);
+  const nextHeight = clampSize(start.height * scale);
 
-  return Math.max(MIN_ITEM_SIZE / startWidth, 1 + projectedWidthDelta / startWidth);
-}
-
-function getLockedResizePosition(start: ResizeStart, direction: number[] | undefined, nextWidth: number, nextHeight: number, fallbackX: number, fallbackY: number) {
   return {
-    x: direction?.[0] === -1 ? clampPosition(start.x + start.width - nextWidth) : direction?.[0] === 1 ? start.x : fallbackX,
-    y: direction?.[1] === -1 ? clampPosition(start.y + start.height - nextHeight) : direction?.[1] === 1 ? start.y : fallbackY,
+    x: dirX === -1 ? clampPosition(anchorX - nextWidth) : clampPosition(anchorX),
+    y: dirY === -1 ? clampPosition(anchorY - nextHeight) : clampPosition(anchorY),
+    width: nextWidth,
+    height: nextHeight,
+    scale,
   };
 }
 
@@ -1604,11 +1618,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
                 return;
               }
 
-              const scale = getCornerRatioScale(start, direction, width, height);
-              const nextScaledWidth = clampSize(start.width * scale);
-              const nextScaledHeight = clampSize(start.height * scale);
-              const nextFontSize = clampFontSize(start.fontSize * scale);
-              const lockedPosition = getLockedResizePosition(start, direction, nextScaledWidth, nextScaledHeight, x, y);
+              const lockedResize = getCornerRatioResize(start, direction, x, y, width, height);
+              const nextScaledWidth = lockedResize.width;
+              const nextScaledHeight = lockedResize.height;
+              const nextFontSize = clampFontSize(start.fontSize * lockedResize.scale);
 
               target.style.width = `${nextScaledWidth}px`;
               target.style.height = `${nextScaledHeight}px`;
@@ -1617,7 +1630,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
                 textNode.style.fontSize = `${nextFontSize}px`;
               }
 
-              setLiveTargetTransform(target, { width: nextScaledWidth, height: nextScaledHeight, fontSize: nextFontSize, autoFitText: false, x: lockedPosition.x, y: lockedPosition.y });
+              setLiveTargetTransform(target, { width: nextScaledWidth, height: nextScaledHeight, fontSize: nextFontSize, autoFitText: false, x: lockedResize.x, y: lockedResize.y });
               return;
             }
 
@@ -1631,11 +1644,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
                 return;
               }
 
-              const resizeScale = isCornerResize && !wrappingOnly ? getCornerRatioScale(start, direction, width, height) : 1;
-              const nextWidth = isCornerResize && !wrappingOnly ? clampSize(start.width * resizeScale) : clampSize(width);
-              const nextHeight = isCornerResize && !wrappingOnly ? clampSize(start.height * resizeScale) : clampSize(height);
-              const nextFontSize = wrappingOnly ? undefined : clampFontSize(start.fontSize * resizeScale);
-              const lockedPosition = isCornerResize && !wrappingOnly ? getLockedResizePosition(start, direction, nextWidth, nextHeight, x, y) : { x, y };
+              const lockedResize = isCornerResize && !wrappingOnly ? getCornerRatioResize(start, direction, x, y, width, height) : undefined;
+              const nextWidth = lockedResize?.width ?? clampSize(width);
+              const nextHeight = lockedResize?.height ?? clampSize(height);
+              const nextFontSize = wrappingOnly || !lockedResize ? undefined : clampFontSize(start.fontSize * lockedResize.scale);
               const audioPlayer = target.querySelector(".ascii-audio-player");
 
               target.style.width = `${nextWidth}px`;
@@ -1646,8 +1658,8 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               const audioUpdates: Partial<CanvasItem> = {
                 width: nextWidth,
                 height: nextHeight,
-                x: lockedPosition.x,
-                y: lockedPosition.y,
+                x: lockedResize?.x ?? x,
+                y: lockedResize?.y ?? y,
               };
 
               if (nextFontSize !== undefined) {
@@ -1672,17 +1684,16 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
 
             if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && start.width && start.height) {
-              const scale = getCornerRatioScale(start, direction, width, height);
-              nextWidth = clampSize(start.width * scale);
-              nextHeight = clampSize(start.height * scale);
-              const lockedPosition = getLockedResizePosition(start, direction, nextWidth, nextHeight, x, y);
+              const lockedResize = getCornerRatioResize(start, direction, x, y, width, height);
+              nextWidth = lockedResize.width;
+              nextHeight = lockedResize.height;
               target.style.width = `${nextWidth}px`;
               target.style.height = `${nextHeight}px`;
               setLiveTargetTransform(target, {
                 width: nextWidth,
                 height: nextHeight,
-                x: lockedPosition.x,
-                y: lockedPosition.y,
+                x: lockedResize.x,
+                y: lockedResize.y,
               });
               return;
             }
