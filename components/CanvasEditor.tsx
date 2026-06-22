@@ -111,6 +111,10 @@ function clampFontSize(value: number) {
   return round(clamp(value, MIN_FONT_SIZE, MAX_FONT_SIZE));
 }
 
+function getDominantResizeScale(widthScale: number, heightScale: number) {
+  return Math.abs(widthScale - 1) >= Math.abs(heightScale - 1) ? widthScale : heightScale;
+}
+
 function itemTransform(item: Pick<CanvasItem, "x" | "y" | "rotate">) {
   return `translate3d(${item.x}px, ${item.y}px, 0) rotate(${item.rotate}deg)`;
 }
@@ -1607,7 +1611,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
               const widthScale = width / start.width;
               const heightScale = height / start.height;
-              const resizeScale = isCornerResize && !wrappingOnly ? Math.max(widthScale, heightScale) : 1;
+              const resizeScale = isCornerResize && !wrappingOnly ? getDominantResizeScale(widthScale, heightScale) : 1;
               const nextWidth = isCornerResize && !wrappingOnly ? clampSize(start.width * resizeScale) : clampSize(width);
               const nextHeight = isCornerResize && !wrappingOnly ? clampSize(start.height * resizeScale) : clampSize(height);
               const nextFontSize = wrappingOnly ? undefined : clampFontSize(start.fontSize * resizeScale);
@@ -1647,7 +1651,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
 
             if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && start.width && start.height) {
-              const scale = Math.max(width / start.width, height / start.height);
+              const widthScale = width / start.width;
+              const heightScale = height / start.height;
+              const scale = getDominantResizeScale(widthScale, heightScale);
               nextWidth = clampSize(start.width * scale);
               nextHeight = clampSize(start.height * scale);
             }

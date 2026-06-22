@@ -46,15 +46,20 @@ export function CanvasItem({ item, editMode = false, editing = false, selected =
       opacity: isHiddenInEditor ? 0.7 : commonStyle.opacity,
     };
     const isSvg = typeof item.src === "string" && item.src.toLowerCase().split("?")[0].endsWith(".svg");
+    const isShapeAsset = typeof item.src === "string" && item.src.startsWith("/shapes/");
     const hasRecolorOverlay = recolorIntensity > 0 && Boolean(item.src);
+    const shouldHideBaseForRecolor = hasRecolorOverlay && (isSvg || isShapeAsset);
     const svgBaseStyle = {
       backgroundImage: item.src ? `url("${item.src}")` : undefined,
-      opacity: isSvg && hasRecolorOverlay ? 0 : undefined,
+      opacity: shouldHideBaseForRecolor ? 0 : undefined,
+    };
+    const imageBaseStyle = {
+      opacity: shouldHideBaseForRecolor ? 0 : undefined,
     };
 
     return (
       <MediaWithLabels item={item} editMode={editMode}>
-        <div className={`canvas-recolor-wrap${isSvg && hasRecolorOverlay ? " canvas-image-has-recolor-overlay" : ""}`} style={imageStyle}>
+        <div className={`canvas-recolor-wrap${shouldHideBaseForRecolor ? " canvas-image-has-recolor-overlay" : ""}`} style={imageStyle}>
           <div className="canvas-image-crop-layer" style={cropStyle}>
             {isSvg ? (
               <div className="canvas-svg-image-fill" style={svgBaseStyle} />
@@ -63,6 +68,7 @@ export function CanvasItem({ item, editMode = false, editing = false, selected =
                 src={item.src}
                 alt={item.text ?? item.title ?? ""}
                 className="canvas-image-fill"
+                style={imageBaseStyle}
                 draggable={false}
                 onError={() => setFailed(true)}
               />
