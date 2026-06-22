@@ -1683,6 +1683,25 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             let nextHeight = clampSize(height);
             const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
             const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
+            const isHorizontalSideResize = Boolean(direction?.[0] && !direction?.[1]);
+            const isVerticalSideResize = Boolean(!direction?.[0] && direction?.[1]);
+
+            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && !isCornerResize && start.width && start.height) {
+              const nextSideWidth = isHorizontalSideResize ? clampSize(width) : start.width;
+              const nextSideHeight = isVerticalSideResize ? clampSize(height) : start.height;
+              const nextSideX = isHorizontalSideResize && direction?.[0] === -1 ? clampPosition(start.x + start.width - nextSideWidth) : start.x;
+              const nextSideY = isVerticalSideResize && direction?.[1] === -1 ? clampPosition(start.y + start.height - nextSideHeight) : start.y;
+
+              target.style.width = `${nextSideWidth}px`;
+              target.style.height = `${nextSideHeight}px`;
+              setLiveTargetTransform(target, {
+                width: nextSideWidth,
+                height: nextSideHeight,
+                x: nextSideX,
+                y: nextSideY,
+              });
+              return;
+            }
 
             if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && isCornerResize && start.width && start.height) {
               const lockedResize = getCornerRatioResize(start, direction, x, y, width, height);
