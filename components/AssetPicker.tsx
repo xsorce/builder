@@ -26,6 +26,13 @@ const importLabelByKind: Record<AssetKind, string> = {
   shapes: "[browse, or drag shapes]",
 };
 
+const maxUploadByKind: Record<AssetKind, { bytes: number; label: string }> = {
+  images: { bytes: 10 * 1024 * 1024, label: "images max 10 MB" },
+  videos: { bytes: 150 * 1024 * 1024, label: "videos max 150 MB" },
+  audio: { bytes: 50 * 1024 * 1024, label: "audio max 50 MB" },
+  shapes: { bytes: 2 * 1024 * 1024, label: "shapes max 2 MB" },
+};
+
 const titleByKind: Record<AssetKind, string> = {
   images: "Add Images",
   videos: "Add Videos",
@@ -71,6 +78,7 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
   const closeFrameRef = useRef<number | null>(null);
   const pendingActionRef = useRef<PendingAction | null>(null);
   const importLabel = importLabelByKind[kind];
+  const uploadLimit = maxUploadByKind[kind];
   const title = titleByKind[kind];
 
   function prefersReducedMotion() {
@@ -162,6 +170,16 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
       return;
     }
 
+    if (!validFile(file)) {
+      setMessage("Import failed. Check file type.");
+      return;
+    }
+
+    if (file.size > uploadLimit.bytes) {
+      setMessage(`File too large. ${uploadLimit.label}.`);
+      return;
+    }
+
     setUploading(true);
     setMessage("");
 
@@ -176,7 +194,8 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Upload failed.");
+        const error = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(error?.error ?? "Upload failed.");
       }
 
       const uploaded = (await response.json()) as AssetFile;
@@ -185,8 +204,8 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
         ext: uploaded.ext ?? `.${uploaded.name.split(".").pop() ?? ""}`,
         kind: assetKindByFolder[kind],
       });
-    } catch {
-      setMessage("Import failed. Check file type.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Import failed. Check file type.");
     } finally {
       setUploading(false);
     }
@@ -253,6 +272,7 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
           {dragActive ? "[drop to import]" : importLabel}
           <input className="visually-hidden" type="file" accept={acceptByKind[kind]} disabled={uploading} onChange={(event) => uploadFile(event.target.files?.[0])} />
         </label>
+        <p className="asset-picker-message">{uploadLimit.label}</p>
 
         {message ? <p className="asset-picker-message">{message}</p> : null}
         {loading ? <p className="asset-picker-message">loading...</p> : null}

@@ -51,15 +51,18 @@ const weightOptions = [
 ] as const;
 
 const asciiSymbols = [
-  "♡", "♩", "♪", "♫", "♬", "☁", "☾", "☼",
-  "˚", "˖", "₊", "｡", "･", "⸝", "⸜", "﹏",
-  "୨", "୧", "୨୧", "꒰", "꒱", "︶", "︵", "⊹",
-  "◌", "◍", "◎", "◐", "◑", "◜", "◝", "◟",
-  "✎", "✿", "❀", "❁", "❊", "⟡", "⤷", "↝",
-  "ꕤ", "ꔛ"
+  "˚", "˖", "₊", "｡", "･", "﹏", "〰",
+  "⋆", "★", "☆", "⬩", "⊹",
+  "♡", "❣", "୨୧", "ꕤ", "ꔛ", "︶", "︵",
+  "◍", "◎", "◐", "◑", "꩜",
+  "☁", "☾", "☼", "♻", "➴",
+  "♩", "♪", "♫", "♬",
+  "✎", "✿", "❀", "❁", "❊", "☘",
+  "✧", "⟡", "☺", "♠", "♣",
+  "☯", "☮", "☪", "ૐ", "⚕", "⚔", "⚛", "⚜",
+  "⚠", "⚿", "⛒", "⛬", "☣", "☢", "☠"
 ];
 const asciiCells = Array.from({ length: 100 }, (_, index) => asciiSymbols[index] ?? "");
-
 function getColorPickerValue(value?: string, fallback = "#111111") {
   if (!value) return fallback;
   if (/^#[0-9A-Fa-f]{6}$/.test(value)) return value;
@@ -68,6 +71,12 @@ function getColorPickerValue(value?: string, fallback = "#111111") {
 
 function supportsTextControls(type: CanvasItem["type"]) {
   return type === "text" || type === "link" || type === "symbol";
+}
+
+function nextTextAlign(current: CanvasItem["textAlign"]) {
+  if (current === "left") return "center";
+  if (current === "center") return "right";
+  return "left";
 }
 
 function supportsMediaLabels(type: CanvasItem["type"]) {
@@ -184,7 +193,7 @@ export function CanvasInspector({ item, items = item ? [item] : [], canvas, back
             <span title={backgroundImage || undefined}>{backgroundImage ? truncateMiddleFileName(getFileName(backgroundImage), 24) : "[add background image]"}</span>
             {backgroundImage ? (
               <button type="button" onClick={() => onBackgroundChange({ backgroundImage: undefined, backgroundImageOpacity: undefined, backgroundImageFit: undefined, backgroundImageRecolorColor: undefined, backgroundImageRecolorIntensity: undefined })}>
-                ✖
+                âœ–
               </button>
             ) : null}
           </div>
@@ -258,6 +267,8 @@ export function CanvasInspector({ item, items = item ? [item] : [], canvas, back
   const hasSource = item.type === "image" || item.type === "video" || item.type === "audio";
   const hoverEffectSelected = isHoverEffectSelected(item.hoverEffect);
   const idleEffectSelected = isIdleEffectSelected(item.idleEffect);
+  const textAlign = item.textAlign ?? "left";
+  const textAlignIcon = textAlign === "center" ? "=" : textAlign === "right" ? "\u00bb" : "\u00ab";
 
   const positionFields: NumberField[] = [
     { field: "x", label: "X", placeholder: "0" },
@@ -295,6 +306,15 @@ export function CanvasInspector({ item, items = item ? [item] : [], canvas, back
             <label className="canvas-field canvas-text-field">
               Text
               <span className="canvas-text-input-wrap" ref={asciiMenuRef}>
+                <button
+                  type="button"
+                  className="canvas-text-align-button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onChange({ textAlign: nextTextAlign(textAlign) })}
+                  aria-label={`Align ${textAlign}`}
+                >
+                  {textAlignIcon}
+                </button>
                 <textarea
                   ref={textAreaRef}
                   value={item.text ?? ""}

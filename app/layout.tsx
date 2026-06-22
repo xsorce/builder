@@ -24,9 +24,9 @@ export const metadata: Metadata = {
   title: "Standalone Web Builder",
   description: "A standalone canvas web page builder.",
   icons: {
-    icon: "/default-image.png",
-    shortcut: "/default-image.png",
-    apple: "/default-image.png",
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/favicon.png",
   },
 };
 

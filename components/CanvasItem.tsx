@@ -189,6 +189,7 @@ function EditableText({
   const embedSrc = getSafeEmbedSrc(text);
   const textStyle = {
     ...style,
+    textAlign: item.textAlign ?? "left",
     pointerEvents: editMode && !editing ? "none" : undefined,
     userSelect: editMode && !editing ? "none" : undefined,
   } as React.CSSProperties;

@@ -3,5 +3,10 @@
     "slug": "",
     "title": "Starter Page",
     "file": "default.json"
+  },
+  {
+    "slug": "a",
+    "title": "a",
+    "file": "a.json"
   }
 ]

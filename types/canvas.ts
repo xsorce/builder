@@ -40,6 +40,7 @@ export type CanvasItem = {
   fontSize?: number;
   fontWeight?: number;
   fontFamily?: CanvasFontFamily;
+  textAlign?: "left" | "center" | "right";
   autoFitText?: boolean;
   color?: string;
   recolorColor?: string;

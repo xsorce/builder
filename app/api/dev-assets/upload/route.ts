@@ -3,6 +3,13 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 import { assetConfig, getAssetDirectory, isAssetKind, isLocalHost, sanitizeFilename } from "../shared";
 
+const maxSizeLabelByKind = {
+  images: "image size is 10 MB",
+  shapes: "shape size is 2 MB",
+  audio: "audio size is 50 MB",
+  videos: "video size is 150 MB",
+} as const;
+
 async function exists(filePath: string) {
   try {
     await stat(filePath);
@@ -48,6 +55,10 @@ export async function POST(request: Request) {
 
   if (!config.extensions.has(ext)) {
     return NextResponse.json({ error: `Unsupported ${kind} extension.` }, { status: 400 });
+  }
+
+  if (file.size > config.maxBytes) {
+    return NextResponse.json({ error: `File too large. Max ${maxSizeLabelByKind[kind]}.` }, { status: 413 });
   }
 
   const directory = getAssetDirectory(kind);

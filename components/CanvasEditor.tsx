@@ -24,6 +24,10 @@ const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 300;
 const AUTOSAVE_DELAY = 850;
 const QUICK_TOOLS_ICON = "\u274a";
+const DRAFT_STORAGE_PREFIX = "web-builder-draft:";
+const DRAFT_SAVE_DELAY = 600;
+const BETA_SPLASH_STORAGE_KEY = "xsorce-webrooms-splash-seen";
+const SPLASH_FADE_OUT_MS = 900;
 
 type CanvasEditorProps = {
   initialCanvas: CanvasDocument;
@@ -150,28 +154,22 @@ function getCornerRatioResize(start: ResizeStart, direction: number[] | undefine
   };
 }
 
-function getDirectSideResize(start: ResizeStart, direction: number[] | undefined, dist: number[] | undefined, scale: number) {
-  const distX = (dist?.[0] ?? 0) / scale;
-  const distY = (dist?.[1] ?? 0) / scale;
+function getDirectSideResize(start: ResizeStart, direction: number[] | undefined, rawWidth: number, rawHeight: number) {
+  const dirX = direction?.[0] ?? 0;
+  const dirY = direction?.[1] ?? 0;
   let nextX = start.x;
   let nextY = start.y;
   let nextWidth = start.width;
   let nextHeight = start.height;
 
-  if (direction?.[0] === -1) {
-    nextWidth = clampSize(start.width - distX);
-    nextX = clampPosition(start.x + start.width - nextWidth);
-  } else if (direction?.[0] === 1) {
-    nextWidth = clampSize(start.width + distX);
-    nextX = start.x;
+  if (dirX) {
+    nextWidth = clampSize(rawWidth);
+    nextX = dirX === -1 ? clampPosition(start.x + start.width - nextWidth) : start.x;
   }
 
-  if (direction?.[1] === -1) {
-    nextHeight = clampSize(start.height - distY);
-    nextY = clampPosition(start.y + start.height - nextHeight);
-  } else if (direction?.[1] === 1) {
-    nextHeight = clampSize(start.height + distY);
-    nextY = start.y;
+  if (dirY) {
+    nextHeight = clampSize(rawHeight);
+    nextY = dirY === -1 ? clampPosition(start.y + start.height - nextHeight) : start.y;
   }
 
   return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
@@ -583,6 +581,11 @@ function isCanvasImport(value: unknown): value is CanvasDocument {
   return Boolean(value && typeof value === "object" && Array.isArray((value as CanvasDocument).items) && typeof (value as CanvasDocument).title === "string");
 }
 
+function getDraftStorageKey(canvas: Pick<CanvasDocument, "slug" | "title">) {
+  const id = canvas.slug || canvas.title || "untitled";
+  return `${DRAFT_STORAGE_PREFIX}${id}`;
+}
+
 export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const openBackgroundOnLoad = shouldOpenBackgroundOnLoad();
   const [canvas, setCanvas] = useState(initialCanvas);
@@ -595,6 +598,11 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const [pickerTarget, setPickerTarget] = useState<"item" | "background">("item");
   const [editorWarning, setEditorWarning] = useState("");
   const [quickToolsOpen, setQuickToolsOpen] = useState(false);
+  const [quickToolsToast, setQuickToolsToast] = useState("");
+  const [draftStatus, setDraftStatus] = useState("");
+  const [draftPrompt, setDraftPrompt] = useState<{ savedAt: number; canvas: CanvasDocument } | null>(null);
+  const [showBetaSplash, setShowBetaSplash] = useState(false);
+  const [splashClosing, setSplashClosing] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(openBackgroundOnLoad);
   const [mobileView, setMobileView] = useState(() => (typeof window !== "undefined" ? window.localStorage.getItem(EDITOR_VIEW_MODE_KEY) === "mobile" : false));
@@ -607,6 +615,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
   const artboardRef = useRef<HTMLDivElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const quickToolsRef = useRef<HTMLDivElement | null>(null);
   const moveableRef = useRef<Moveable>(null);
   const canvasRef = useRef(canvas);
   const transformStartRef = useRef<CanvasDocument | null>(null);
@@ -617,6 +626,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const resizeStartRef = useRef<ResizeStart | null>(null);
   const hasMountedRef = useRef(false);
   const autosaveTimerRef = useRef<number | null>(null);
+  const draftSaveTimerRef = useRef<number | null>(null);
+  const quickToolsToastTimerRef = useRef<number | null>(null);
+  const splashClosingTimerRef = useRef<number | null>(null);
+  const draftPromptPendingRef = useRef(false);
   const lastSavedJsonRef = useRef(JSON.stringify(initialCanvas));
   const selectedIdRef = useRef(selectedId);
   const selectedIdsRef = useRef(selectedIds);
@@ -641,6 +654,23 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }, [canvas]);
 
   useEffect(() => {
+    try {
+      const rawDraft = window.localStorage.getItem(getDraftStorageKey(initialCanvas));
+      if (!rawDraft) {
+        return;
+      }
+
+      const draft = JSON.parse(rawDraft) as { savedAt?: unknown; canvas?: unknown };
+      if (typeof draft.savedAt === "number" && isCanvasImport(draft.canvas) && JSON.stringify(draft.canvas) !== JSON.stringify(initialCanvas)) {
+        draftPromptPendingRef.current = true;
+        setDraftPrompt({ savedAt: draft.savedAt, canvas: draft.canvas });
+      }
+    } catch {
+      setDraftStatus("");
+    }
+  }, [initialCanvas]);
+
+  useEffect(() => {
     window.localStorage.setItem(EDITOR_VIEW_MODE_KEY, mobileView ? "mobile" : "desktop");
   }, [mobileView]);
 
@@ -652,6 +682,41 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     updateViewportSize();
     window.addEventListener("resize", updateViewportSize);
     return () => window.removeEventListener("resize", updateViewportSize);
+  }, []);
+
+  useEffect(() => {
+    if (!quickToolsOpen) {
+      return;
+    }
+
+    function closeQuickToolsOnOutsidePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Node && quickToolsRef.current?.contains(target)) {
+        return;
+      }
+
+      setQuickToolsOpen(false);
+    }
+
+    window.addEventListener("pointerdown", closeQuickToolsOnOutsidePointerDown, true);
+    return () => window.removeEventListener("pointerdown", closeQuickToolsOnOutsidePointerDown, true);
+  }, [quickToolsOpen]);
+
+  useEffect(() => {
+    if (!window.localStorage.getItem(BETA_SPLASH_STORAGE_KEY)) {
+      setShowBetaSplash(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (quickToolsToastTimerRef.current) {
+        window.clearTimeout(quickToolsToastTimerRef.current);
+      }
+      if (splashClosingTimerRef.current) {
+        window.clearTimeout(splashClosingTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -884,6 +949,34 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }, [canvas, saveCanvas]);
 
   useEffect(() => {
+    if (draftPromptPendingRef.current) {
+      return;
+    }
+
+    if (draftSaveTimerRef.current) {
+      window.clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+
+    draftSaveTimerRef.current = window.setTimeout(() => {
+      draftSaveTimerRef.current = null;
+      try {
+        window.localStorage.setItem(getDraftStorageKey(canvas), JSON.stringify({ savedAt: Date.now(), canvas }));
+        setDraftStatus("local draft saved");
+      } catch {
+        setDraftStatus("draft not saved");
+      }
+    }, DRAFT_SAVE_DELAY);
+
+    return () => {
+      if (draftSaveTimerRef.current) {
+        window.clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+    };
+  }, [canvas]);
+
+  useEffect(() => {
     if (!selectedItem || !isTextLike(selectedItem)) {
       return;
     }
@@ -1107,6 +1200,41 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     link.click();
     URL.revokeObjectURL(url);
     setQuickToolsOpen(false);
+    setDraftStatus("Exported JSON. Keep a backup of your asset folders.");
+  }
+
+  function restoreDraft() {
+    if (!draftPrompt) {
+      return;
+    }
+
+    setCanvas(draftPrompt.canvas);
+    canvasRef.current = draftPrompt.canvas;
+    draftPromptPendingRef.current = false;
+    setDraftPrompt(null);
+    setDraftStatus("draft restored");
+  }
+
+  function showQuickToolsToast(message: string) {
+    if (quickToolsToastTimerRef.current) {
+      window.clearTimeout(quickToolsToastTimerRef.current);
+    }
+
+    setQuickToolsToast(message);
+    quickToolsToastTimerRef.current = window.setTimeout(() => setQuickToolsToast(""), 2600);
+  }
+
+  function dismissBetaSplash() {
+    window.localStorage.setItem(BETA_SPLASH_STORAGE_KEY, "1");
+    if (splashClosingTimerRef.current) {
+      window.clearTimeout(splashClosingTimerRef.current);
+    }
+    setSplashClosing(true);
+    splashClosingTimerRef.current = window.setTimeout(() => {
+      setShowBetaSplash(false);
+      setSplashClosing(false);
+      splashClosingTimerRef.current = null;
+    }, SPLASH_FADE_OUT_MS);
   }
 
   async function importProjectJson(event: ChangeEvent<HTMLInputElement>) {
@@ -1136,7 +1264,8 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       setBackgroundInspectorOpen(false);
       setInspectorCollapsed(true);
       setQuickToolsOpen(false);
-      setEditorWarning("Imported project JSON.");
+      setEditorWarning("");
+      showQuickToolsToast("Imported project JSON.");
     } catch {
       setEditorWarning("Invalid project JSON.");
     }
@@ -1375,7 +1504,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         onDelete={deleteSelected}
         onSave={saveCanvas}
       />
-      <div className={`canvas-quick-tools${quickToolsOpen ? " is-open" : ""}`}>
+      <div ref={quickToolsRef} className={`canvas-quick-tools${quickToolsOpen ? " is-open" : ""}`}>
         <button type="button" className="canvas-quick-tools-button" onClick={() => setQuickToolsOpen((current) => !current)} aria-label="Quick tools">
           {QUICK_TOOLS_ICON}
         </button>
@@ -1386,10 +1515,50 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           <button type="button" onClick={() => importInputRef.current?.click()}>
             Import Project JSON
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (splashClosingTimerRef.current) {
+                window.clearTimeout(splashClosingTimerRef.current);
+                splashClosingTimerRef.current = null;
+              }
+              setSplashClosing(false);
+              setShowBetaSplash(true);
+              setQuickToolsOpen(false);
+            }}
+          >
+            Show Welcome Splash
+          </button>
+          {draftStatus ? (
+            <p className="canvas-quick-tools-status" title="Layout backup saved in this browser. Export JSON before closing.">
+              {draftStatus}
+            </p>
+          ) : null}
         </div>
         <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importProjectJson} />
       </div>
+      {quickToolsToast ? <div className="canvas-quick-tools-toast">{quickToolsToast}</div> : null}
       {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
+      {draftPrompt ? (
+        <div className="canvas-draft-prompt">
+          <strong>Local draft found</strong>
+          <span>You may have unsaved work from {new Date(draftPrompt.savedAt).toLocaleString()}.</span>
+          <div>
+            <button type="button" onClick={restoreDraft}>
+              restore
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                draftPromptPendingRef.current = false;
+                setDraftPrompt(null);
+              }}
+            >
+              ignore
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div
         ref={artboardRef}
         className={`canvas-artboard ${mobileView ? "canvas-artboard-mobile-editor" : ""}`}
@@ -1713,7 +1882,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             const isSideResize = Boolean(direction?.[0] || direction?.[1]) && !isCornerResize;
 
             if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && isSideResize && start.width && start.height) {
-              const sideResize = getDirectSideResize(start, direction, drag.dist, editorScale);
+              const sideResize = getDirectSideResize(start, direction, width, height);
 
               target.style.width = `${sideResize.width}px`;
               target.style.height = `${sideResize.height}px`;
@@ -1830,6 +1999,33 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         />
       ) : null}
       {pickerKind ? <AssetPicker kind={pickerKind} onClose={() => setPickerKind(null)} onSelect={onPickerSelect} /> : null}
+      {showBetaSplash ? (
+        <div className={`webrooms-splash-overlay${splashClosing ? " is-closing" : ""}`}>
+          <div className="webrooms-splash-card">
+            <img className="webrooms-splash-logo" src="/images/xsorce.png" alt="xsorce" />
+            <div className="webrooms-splash-intro">
+              <p>welcome to xsorce's</p>
+              <h1>PageBuilder</h1>
+              <span>thanks for beta testing :D</span>
+            </div>
+            <div className="webrooms-splash-note">
+              <h2>There is No cloud storage yet</h2>
+              <p>Make a new folder on your PC, and upload all images, videos, and audio use on your page from that folder.</p>
+            </div>
+            <div className="webrooms-splash-note">
+              <h2>Export before you leave</h2>
+              <p>Autosave works in case you need to refresh the page, but make sure to export your project before closing. Open Quick Tools in the upper-right corner and export your project as a JSON file.</p>
+            </div>
+            <div className="webrooms-splash-note">
+              <h2>Report any issues to me</h2>
+              <p>Keep a list of any bugs, inconviences, or design opinions you have while using the builder. Your feedback is much needed!</p>
+            </div>
+            <button type="button" className="webrooms-splash-button" onClick={dismissBetaSplash}>
+              understood! enter the web builder
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

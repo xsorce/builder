@@ -6,24 +6,28 @@ export const assetConfig = {
     folder: "images",
     publicPath: "/images",
     kind: "image",
+    maxBytes: 10 * 1024 * 1024,
     extensions: new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif"]),
   },
   shapes: {
     folder: "shapes",
     publicPath: "/shapes",
     kind: "image",
+    maxBytes: 2 * 1024 * 1024,
     extensions: new Set([".png"]),
   },
   videos: {
     folder: "videos",
     publicPath: "/videos",
     kind: "video",
+    maxBytes: 150 * 1024 * 1024,
     extensions: new Set([".mp4", ".webm", ".ogg", ".ogv", ".mov", ".avi"]),
   },
   audio: {
     folder: "audio",
     publicPath: "/audio",
     kind: "audio",
+    maxBytes: 50 * 1024 * 1024,
     extensions: new Set([".mp3", ".wav", ".ogg", ".m4a"]),
   },
 } as const;
