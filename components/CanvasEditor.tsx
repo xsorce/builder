@@ -1190,17 +1190,41 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     setMobileView((current) => !current);
   }
 
-  function exportProjectJson() {
-    const project = canvasRef.current;
-    const slug = (project.slug || project.title || "canvas").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "canvas";
-    const url = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${slug}-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setQuickToolsOpen(false);
-    setDraftStatus("Exported JSON. Keep a backup of your asset folders.");
+  async function exportProjectJson() {
+    try {
+      const currentCanvas = canvasRef.current;
+      const currentSlug = currentCanvas.slug === "home" || currentCanvas.slug === "index" ? "" : currentCanvas.slug;
+      const response = await fetch("/api/dev-pages/export");
+
+      if (!response.ok) {
+        setEditorWarning("Project export failed.");
+        return;
+      }
+
+      const project = (await response.json()) as {
+        type: "web-builder-project";
+        version: number;
+        exportedAt: string;
+        currentSlug: string;
+        pages: Array<{ slug: string; title: string; file: string; canvas: CanvasDocument }>;
+      };
+      const exportData = {
+        ...project,
+        exportedAt: new Date().toISOString(),
+        currentSlug,
+        pages: project.pages.map((page) => (page.slug === currentSlug ? { ...page, title: currentCanvas.title, canvas: currentCanvas } : page)),
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `web-builder-project-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setQuickToolsOpen(false);
+      setDraftStatus("Exported JSON. Keep a backup of your asset folders.");
+    } catch {
+      setEditorWarning("Project export failed.");
+    }
   }
 
   function restoreDraft() {
@@ -1641,7 +1665,6 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
                 setSelectedIds([item.id]);
               }
               setBackgroundInspectorOpen(false);
-              setInspectorCollapsed(false);
               if (!isTextLike(item)) {
                 setEditingTextId(undefined);
               }
@@ -1959,14 +1982,8 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             });
             applyGroupDraftLive();
           }}
-          onRotate={({ target, beforeRotate, drag }) => {
+          onRotate={({ target, beforeRotate }) => {
             const updates: Partial<CanvasItem> = { rotate: round(beforeRotate) };
-
-            if (drag?.beforeTranslate) {
-              updates.x = clampPosition(drag.beforeTranslate[0]);
-              updates.y = clampPosition(drag.beforeTranslate[1]);
-            }
-
             setLiveTargetTransform(target, updates);
           }}
           onDragEnd={commitTransformHistory}

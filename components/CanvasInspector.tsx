@@ -192,8 +192,13 @@ export function CanvasInspector({ item, items = item ? [item] : [], canvas, back
           <div className={`canvas-background-file-row${backgroundImage ? "" : " is-empty"}`} onClick={backgroundImage ? undefined : onBackgroundPick}>
             <span title={backgroundImage || undefined}>{backgroundImage ? truncateMiddleFileName(getFileName(backgroundImage), 24) : "[add background image]"}</span>
             {backgroundImage ? (
-              <button type="button" onClick={() => onBackgroundChange({ backgroundImage: undefined, backgroundImageOpacity: undefined, backgroundImageFit: undefined, backgroundImageRecolorColor: undefined, backgroundImageRecolorIntensity: undefined })}>
-                âœ–
+              <button
+                type="button"
+                aria-label="Remove background image"
+                title="Remove background image"
+                onClick={() => onBackgroundChange({ backgroundImage: undefined, backgroundImageOpacity: undefined, backgroundImageFit: undefined, backgroundImageRecolorColor: undefined, backgroundImageRecolorIntensity: undefined })}
+              >
+                &times;
               </button>
             ) : null}
           </div>
