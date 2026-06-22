@@ -150,6 +150,33 @@ function getCornerRatioResize(start: ResizeStart, direction: number[] | undefine
   };
 }
 
+function getDirectSideResize(start: ResizeStart, direction: number[] | undefined, dist: number[] | undefined, scale: number) {
+  const distX = (dist?.[0] ?? 0) / scale;
+  const distY = (dist?.[1] ?? 0) / scale;
+  let nextX = start.x;
+  let nextY = start.y;
+  let nextWidth = start.width;
+  let nextHeight = start.height;
+
+  if (direction?.[0] === -1) {
+    nextWidth = clampSize(start.width - distX);
+    nextX = clampPosition(start.x + start.width - nextWidth);
+  } else if (direction?.[0] === 1) {
+    nextWidth = clampSize(start.width + distX);
+    nextX = start.x;
+  }
+
+  if (direction?.[1] === -1) {
+    nextHeight = clampSize(start.height - distY);
+    nextY = clampPosition(start.y + start.height - nextHeight);
+  } else if (direction?.[1] === 1) {
+    nextHeight = clampSize(start.height + distY);
+    nextY = start.y;
+  }
+
+  return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+}
+
 function itemTransform(item: Pick<CanvasItem, "x" | "y" | "rotate">) {
   return `translate3d(${item.x}px, ${item.y}px, 0) rotate(${item.rotate}deg)`;
 }
@@ -1683,22 +1710,18 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             let nextHeight = clampSize(height);
             const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
             const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
-            const isHorizontalSideResize = Boolean(direction?.[0] && !direction?.[1]);
-            const isVerticalSideResize = Boolean(!direction?.[0] && direction?.[1]);
+            const isSideResize = Boolean(direction?.[0] || direction?.[1]) && !isCornerResize;
 
-            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && !isCornerResize && start.width && start.height) {
-              const nextSideWidth = isHorizontalSideResize ? clampSize(width) : start.width;
-              const nextSideHeight = isVerticalSideResize ? clampSize(height) : start.height;
-              const nextSideX = isHorizontalSideResize && direction?.[0] === -1 ? clampPosition(start.x + start.width - nextSideWidth) : start.x;
-              const nextSideY = isVerticalSideResize && direction?.[1] === -1 ? clampPosition(start.y + start.height - nextSideHeight) : start.y;
+            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && isSideResize && start.width && start.height) {
+              const sideResize = getDirectSideResize(start, direction, drag.dist, editorScale);
 
-              target.style.width = `${nextSideWidth}px`;
-              target.style.height = `${nextSideHeight}px`;
+              target.style.width = `${sideResize.width}px`;
+              target.style.height = `${sideResize.height}px`;
               setLiveTargetTransform(target, {
-                width: nextSideWidth,
-                height: nextSideHeight,
-                x: nextSideX,
-                y: nextSideY,
+                width: sideResize.width,
+                height: sideResize.height,
+                x: sideResize.x,
+                y: sideResize.y,
               });
               return;
             }
