@@ -7,8 +7,14 @@ export const dynamic = "force-dynamic";
 
 type PageProps = {
   params?: Promise<{ slug?: string[] }>;
-  searchParams?: Promise<{ edit?: string }>;
+  searchParams?: Promise<{ edit?: string; key?: string }>;
 };
+
+function canEdit(searchParams: { edit?: string; key?: string } | undefined) {
+  const editRequested = searchParams?.edit === "1";
+  const remoteEditAllowed = Boolean(process.env.WEB_BUILDER_EDIT_KEY) && searchParams?.key === process.env.WEB_BUILDER_EDIT_KEY;
+  return editRequested && (process.env.NODE_ENV === "development" || remoteEditAllowed);
+}
 
 export async function generateStaticParams() {
   const registry = await readCanvasPageRegistry();
@@ -27,7 +33,7 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     return {};
   }
 
-  const editMode = process.env.NODE_ENV === "development" && resolvedSearchParams?.edit === "1";
+  const editMode = canEdit(resolvedSearchParams);
 
   return {
     title: editMode ? `Editing ${page.slug || "home"}` : page.title,
@@ -44,6 +50,6 @@ export default async function DynamicCanvasPage({ params, searchParams }: PagePr
     notFound();
   }
 
-  const editMode = process.env.NODE_ENV === "development" && resolvedSearchParams?.edit === "1";
+  const editMode = canEdit(resolvedSearchParams);
   return <CanvasPage canvas={canvas} editMode={editMode} />;
 }
