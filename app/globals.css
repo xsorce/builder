@@ -569,6 +569,81 @@ input {
   background: rgba(235, 234, 228, 0.9);
 }
 
+.canvas-quick-tools {
+  position: fixed;
+  right: 1rem;
+  top: 1rem;
+  z-index: 1000;
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 180ms ease;
+}
+
+.canvas-quick-tools:hover,
+.canvas-quick-tools:focus-within,
+.canvas-quick-tools.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.canvas-quick-tools::before {
+  content: "";
+  position: absolute;
+  inset: -0.75rem;
+}
+
+.canvas-quick-tools-button,
+.canvas-quick-tools-menu button {
+  border: 1px solid rgba(17, 17, 17, 0.28);
+  background: rgba(247, 246, 240, 0.88);
+  color: rgba(17, 17, 17, 0.72);
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.66rem;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+.canvas-quick-tools:hover .canvas-quick-tools-button,
+.canvas-quick-tools:focus-within .canvas-quick-tools-button,
+.canvas-quick-tools.is-open .canvas-quick-tools-button,
+.canvas-quick-tools.is-open .canvas-quick-tools-menu button {
+  pointer-events: auto;
+}
+
+.canvas-quick-tools-button {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+}
+
+.canvas-quick-tools-menu {
+  position: relative;
+  display: none;
+  min-width: 168px;
+  border: 1px solid rgba(17, 17, 17, 0.14);
+  background: rgba(247, 246, 240, 0.95);
+  padding: 0.35rem;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.canvas-quick-tools.is-open .canvas-quick-tools-menu {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.canvas-quick-tools-menu button {
+  width: 100%;
+  padding: 0.42rem 0.48rem;
+  text-align: left;
+  text-transform: uppercase;
+}
+
 .canvas-inspector {
   position: fixed;
   right: 1rem;
@@ -1110,7 +1185,10 @@ input {
 .canvas-recolor-overlay,
 .canvas-hover-color-overlay {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  right: auto;
+  bottom: auto;
   pointer-events: none;
   mask-position: center;
   mask-repeat: no-repeat;

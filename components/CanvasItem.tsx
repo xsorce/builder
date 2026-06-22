@@ -70,6 +70,7 @@ export function CanvasItem({ item, editMode = false, editing = false, selected =
                 opacity: recolorIntensity,
                 WebkitMaskImage: `url("${item.src}")`,
                 maskImage: `url("${item.src}")`,
+                ...cropStyle,
               }}
             />
           ) : null}
@@ -79,6 +80,7 @@ export function CanvasItem({ item, editMode = false, editing = false, selected =
               style={{
                 WebkitMaskImage: `url("${item.src}")`,
                 maskImage: `url("${item.src}")`,
+                ...cropStyle,
               }}
             />
           ) : null}
@@ -311,7 +313,7 @@ function getImageCropStyle(item: CanvasItemData) {
   return {
     width: `${10000 / width}%`,
     height: `${10000 / height}%`,
-    transform: `translate(${(-100 * left) / width}%, ${(-100 * top) / height}%)`,
+    transform: `translate(${-left}%, ${-top}%)`,
   } as React.CSSProperties;
 }
 

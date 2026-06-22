@@ -100,7 +100,15 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
       }
       const fontSize = Number.parseFloat(window.getComputedStyle(textNode ?? node).fontSize) || 12;
       const charCount = textNode?.textContent?.length ?? MIN_BAR_LENGTH;
-      const charWidth = (textNode?.getBoundingClientRect().width ?? 0) / Math.max(charCount, 1) || fontSize * 0.62;
+      const previousMaxWidth = textNode?.style.maxWidth;
+      if (textNode) {
+        textNode.style.maxWidth = "none";
+      }
+      const measuredWidth = textNode?.getBoundingClientRect().width ?? 0;
+      if (textNode) {
+        textNode.style.maxWidth = previousMaxWidth ?? "";
+      }
+      const charWidth = measuredWidth / Math.max(charCount, 1) || fontSize * 0.62;
       const nextLength = Math.min(MAX_BAR_LENGTH, Math.max(MIN_BAR_LENGTH, Math.floor(node.clientWidth / charWidth)));
       setBarLength((current) => (current === nextLength ? current : nextLength));
     }
@@ -112,7 +120,7 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
   }, []);
 
   const safeProgress = duration > 0 ? Math.min(Math.max(current / duration, 0), 1) : 0;
-  const filled = safeProgress >= 1 ? barLength : Math.min(barLength, Math.max(0, Math.floor(safeProgress * barLength)));
+  const filled = Math.min(barLength, Math.max(0, Math.ceil(safeProgress * barLength)));
   const empty = barLength - filled;
   const bar = `${TIMELINE_FILLED.repeat(filled)}${TIMELINE_EMPTY.repeat(empty)}`;
   const visibleTitle = title?.trim();

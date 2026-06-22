@@ -2,7 +2,7 @@
 
 import Moveable from "react-moveable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { ChangeEvent, CSSProperties } from "react";
 import type { AssetFile, AssetKind, CanvasDocument, CanvasItem, CanvasItemMobileOverride, CanvasItemType } from "@/content/canvas";
 import { AssetPicker } from "@/components/AssetPicker";
 import { CanvasInspector } from "@/components/CanvasInspector";
@@ -23,6 +23,7 @@ const MAX_POSITION = 10000;
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 300;
 const AUTOSAVE_DELAY = 850;
+const QUICK_TOOLS_ICON = "\u274a";
 
 type CanvasEditorProps = {
   initialCanvas: CanvasDocument;
@@ -158,7 +159,7 @@ function mergeItemUpdates(item: CanvasItem, updates: Partial<CanvasItem>, mobile
     const currentWidth = updates.width ?? (mobileView ? item.mobile?.width ?? item.width : item.width);
     const currentHeight = updates.height ?? (mobileView ? item.mobile?.height ?? item.height : item.height);
     const minWidth = updates.fontSize * 22;
-    const minHeight = updates.fontSize * 4.5;
+    const minHeight = updates.fontSize * 4.2;
 
     updates = {
       ...updates,
@@ -260,21 +261,55 @@ function getIdleStyleVars(item: CanvasItem): CanvasItemStyle {
   };
 }
 
-function getCropUpdates(start: ResizeStart, dist: number[], scale: number, direction?: number[]) {
+function getCropUpdates(start: ResizeStart, width: number, height: number, dist: number[], scale: number, direction?: number[]) {
   const distX = (dist[0] ?? 0) / scale;
   const distY = (dist[1] ?? 0) / scale;
-  const widthDelta = (distX / Math.max(start.width, 1)) * 100;
-  const heightDelta = (distY / Math.max(start.height, 1)) * 100;
   const left = start.cropLeft ?? 0;
   const top = start.cropTop ?? 0;
   const right = start.cropRight ?? 0;
   const bottom = start.cropBottom ?? 0;
+  const sourceWidth = start.width / Math.max((100 - left - right) / 100, 0.01);
+  const sourceHeight = start.height / Math.max((100 - top - bottom) / 100, 0.01);
+  let nextX = start.x;
+  let nextY = start.y;
+  let nextWidth = start.width;
+  let nextHeight = start.height;
+  let cropLeftPx = (sourceWidth * left) / 100;
+  let cropRightPx = (sourceWidth * right) / 100;
+  let cropTopPx = (sourceHeight * top) / 100;
+  let cropBottomPx = (sourceHeight * bottom) / 100;
+
+  if (direction?.[0] === -1) {
+    const delta = clamp(distX, -cropLeftPx, start.width - MIN_ITEM_SIZE);
+    nextX = start.x + delta;
+    nextWidth = start.width - delta;
+    cropLeftPx += delta;
+  } else if (direction?.[0] === 1) {
+    const delta = clamp(start.width - clampSize(width), -cropRightPx, start.width - MIN_ITEM_SIZE);
+    nextWidth = start.width - delta;
+    cropRightPx += delta;
+  }
+
+  if (direction?.[1] === -1) {
+    const delta = clamp(distY, -cropTopPx, start.height - MIN_ITEM_SIZE);
+    nextY = start.y + delta;
+    nextHeight = start.height - delta;
+    cropTopPx += delta;
+  } else if (direction?.[1] === 1) {
+    const delta = clamp(start.height - clampSize(height), -cropBottomPx, start.height - MIN_ITEM_SIZE);
+    nextHeight = start.height - delta;
+    cropBottomPx += delta;
+  }
 
   return {
-    cropLeft: direction?.[0] === -1 ? clampCrop(left + widthDelta, right) : left,
-    cropRight: direction?.[0] === 1 ? clampCrop(right - widthDelta, left) : right,
-    cropTop: direction?.[1] === -1 ? clampCrop(top + heightDelta, bottom) : top,
-    cropBottom: direction?.[1] === 1 ? clampCrop(bottom - heightDelta, top) : bottom,
+    x: clampPosition(nextX),
+    y: clampPosition(nextY),
+    width: clampSize(nextWidth),
+    height: clampSize(nextHeight),
+    cropLeft: clampCrop((cropLeftPx / sourceWidth) * 100, (cropRightPx / sourceWidth) * 100),
+    cropRight: clampCrop((cropRightPx / sourceWidth) * 100, (cropLeftPx / sourceWidth) * 100),
+    cropTop: clampCrop((cropTopPx / sourceHeight) * 100, (cropBottomPx / sourceHeight) * 100),
+    cropBottom: clampCrop((cropBottomPx / sourceHeight) * 100, (cropTopPx / sourceHeight) * 100),
   };
 }
 
@@ -283,17 +318,23 @@ function clampCrop(value: number, opposite = 0) {
 }
 
 function applyImageCropStyle(target: HTMLElement | SVGElement, updates: ReturnType<typeof getCropUpdates>) {
-  const cropTarget = target.querySelector(".canvas-image-fill, .canvas-svg-image-fill");
+  const cropTargets = target.querySelectorAll(".canvas-image-fill, .canvas-svg-image-fill, .canvas-recolor-overlay, .canvas-hover-color-overlay");
 
-  if (!(cropTarget instanceof HTMLElement)) {
+  if (!cropTargets.length) {
     return;
   }
 
   const width = Math.max(1, 100 - (updates.cropLeft ?? 0) - (updates.cropRight ?? 0));
   const height = Math.max(1, 100 - (updates.cropTop ?? 0) - (updates.cropBottom ?? 0));
-  cropTarget.style.width = `${10000 / width}%`;
-  cropTarget.style.height = `${10000 / height}%`;
-  cropTarget.style.transform = `translate(${(-100 * (updates.cropLeft ?? 0)) / width}%, ${(-100 * (updates.cropTop ?? 0)) / height}%)`;
+  cropTargets.forEach((cropTarget) => {
+    if (!(cropTarget instanceof HTMLElement)) {
+      return;
+    }
+
+    cropTarget.style.width = `${10000 / width}%`;
+    cropTarget.style.height = `${10000 / height}%`;
+    cropTarget.style.transform = `translate(${-(updates.cropLeft ?? 0)}%, ${-(updates.cropTop ?? 0)}%)`;
+  });
 }
 
 function needsMobileOverride(item: CanvasItem) {
@@ -393,7 +434,7 @@ function defaultItem(type: CanvasItemType, count: number): CanvasItem {
     x: 180 + count * 18,
     y: 180 + count * 18,
     width: textSize?.width ?? (type === "video" ? 320 : type === "audio" ? 340 : 260),
-    height: textSize?.height ?? (type === "image" || type === "video" ? 180 : type === "audio" ? 82 : undefined),
+    height: textSize?.height ?? (type === "image" || type === "video" ? 180 : type === "audio" ? 72 : undefined),
     rotate: 0,
     zIndex: defaultLayer(type, id),
     opacity: 1,
@@ -478,6 +519,10 @@ function shouldOpenBackgroundOnLoad() {
   return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("background") === "1";
 }
 
+function isCanvasImport(value: unknown): value is CanvasDocument {
+  return Boolean(value && typeof value === "object" && Array.isArray((value as CanvasDocument).items) && typeof (value as CanvasDocument).title === "string");
+}
+
 export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const openBackgroundOnLoad = shouldOpenBackgroundOnLoad();
   const [canvas, setCanvas] = useState(initialCanvas);
@@ -489,6 +534,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const [pickerKind, setPickerKind] = useState<AssetKind | null>(null);
   const [pickerTarget, setPickerTarget] = useState<"item" | "background">("item");
   const [editorWarning, setEditorWarning] = useState("");
+  const [quickToolsOpen, setQuickToolsOpen] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(openBackgroundOnLoad);
   const [mobileView, setMobileView] = useState(() => (typeof window !== "undefined" ? window.localStorage.getItem(EDITOR_VIEW_MODE_KEY) === "mobile" : false));
@@ -500,6 +546,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const [selectedTargets, setSelectedTargets] = useState<HTMLDivElement[]>([]);
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
   const artboardRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const moveableRef = useRef<Moveable>(null);
   const canvasRef = useRef(canvas);
   const transformStartRef = useRef<CanvasDocument | null>(null);
@@ -781,6 +828,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       return;
     }
 
+    if (editingTextId === selectedItem.id) {
+      return;
+    }
+
     if (isSafeEmbedText(selectedItem.text) && editingTextId !== selectedItem.id) {
       return;
     }
@@ -984,6 +1035,51 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
   function toggleMobileView() {
     setMobileView((current) => !current);
+  }
+
+  function exportProjectJson() {
+    const project = canvasRef.current;
+    const slug = (project.slug || project.title || "canvas").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "canvas";
+    const url = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setQuickToolsOpen(false);
+  }
+
+  async function importProjectJson(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+
+      if (!isCanvasImport(parsed)) {
+        setEditorWarning("Invalid project JSON.");
+        return;
+      }
+
+      if (!window.confirm("Import Project JSON and replace this page?")) {
+        return;
+      }
+
+      commitCanvas(parsed);
+      setSelectedId(undefined);
+      setSelectedIds([]);
+      setEditingTextId(undefined);
+      setBackgroundInspectorOpen(false);
+      setInspectorCollapsed(true);
+      setQuickToolsOpen(false);
+      setEditorWarning("Imported project JSON.");
+    } catch {
+      setEditorWarning("Invalid project JSON.");
+    }
   }
 
   function getSpawnPosition(item: Pick<CanvasItem, "width" | "height">) {
@@ -1219,6 +1315,20 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         onDelete={deleteSelected}
         onSave={saveCanvas}
       />
+      <div className={`canvas-quick-tools${quickToolsOpen ? " is-open" : ""}`}>
+        <button type="button" className="canvas-quick-tools-button" onClick={() => setQuickToolsOpen((current) => !current)} aria-label="Quick tools">
+          {QUICK_TOOLS_ICON}
+        </button>
+        <div className="canvas-quick-tools-menu">
+          <button type="button" onClick={exportProjectJson}>
+            Export Project JSON
+          </button>
+          <button type="button" onClick={() => importInputRef.current?.click()}>
+            Import Project JSON
+          </button>
+        </div>
+        <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importProjectJson} />
+      </div>
       {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
       <div
         ref={artboardRef}
@@ -1495,15 +1605,18 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
               const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
               const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
+              const wrappingOnly = shiftKey || modifierKey;
 
               if ((!isCornerResize && !isHorizontalResize) || !start.width || !start.height) {
                 return;
               }
 
-              const scale = shiftKey && isCornerResize ? Math.max(width / start.width, height / start.height) : 1;
-              const nextWidth = shiftKey && isCornerResize ? clampSize(start.width * scale) : clampSize(width);
-              const nextHeight = shiftKey && isCornerResize ? clampSize(start.height * scale) : isHorizontalResize ? start.height : clampSize(height);
-              const nextFontSize = shiftKey && isCornerResize ? clampFontSize(start.fontSize * scale) : undefined;
+              const nextWidth = clampSize(width);
+              const nextHeight = isHorizontalResize ? start.height : clampSize(height);
+              const widthScale = nextWidth / start.width;
+              const heightScale = nextHeight / start.height;
+              const resizeScale = isCornerResize ? Math.min(widthScale, heightScale) : widthScale;
+              const nextFontSize = wrappingOnly ? undefined : clampFontSize(start.fontSize * resizeScale);
               const audioPlayer = target.querySelector(".ascii-audio-player");
 
               target.style.width = `${nextWidth}px`;
@@ -1527,12 +1640,11 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             }
 
             if (selected && start?.id === selected.id && selected.type === "image" && modifierKey) {
-              const cropUpdates = getCropUpdates(start, drag.dist ?? [0, 0], editorScale, direction);
-              target.style.width = `${start.width}px`;
-              target.style.height = `${start.height}px`;
-              target.style.transform = itemTransform({ ...selected, x: start.x, y: start.y });
+              const cropUpdates = getCropUpdates(start, width, height, drag.dist ?? [0, 0], editorScale, direction);
+              target.style.width = `${cropUpdates.width}px`;
+              target.style.height = `${cropUpdates.height}px`;
               applyImageCropStyle(target, cropUpdates);
-              transformDraftRef.current = { ...transformDraftRef.current, ...cropUpdates };
+              setLiveTargetTransform(target, cropUpdates);
               return;
             }
 
