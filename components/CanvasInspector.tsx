@@ -50,7 +50,14 @@ const weightOptions = [
   [900, "900 Black"],
 ] as const;
 
-const asciiSymbols = ["✦", "✧", "★", "☆", "✶", "✷", "✸", "✹", "✺", "✿", "❀", "❁", "◆", "◇", "◈", "◉", "○", "●", "△", "▽", "▲", "▼", "→", "←", "↗", "↘", "∞", "⌁", "▒", "░"];
+const asciiSymbols = [
+  "♡", "♩", "♪", "♫", "♬", "☁", "☾", "☼",
+  "˚", "˖", "₊", "｡", "･", "⸝", "⸜", "﹏",
+  "୨", "୧", "୨୧", "꒰", "꒱", "︶", "︵", "⊹",
+  "◌", "◍", "◎", "◐", "◑", "◜", "◝", "◟",
+  "✎", "✿", "❀", "❁", "❊", "⟡", "⤷", "↝",
+  "ꕤ", "ꔛ"
+];
 const asciiCells = Array.from({ length: 100 }, (_, index) => asciiSymbols[index] ?? "");
 
 function getColorPickerValue(value?: string, fallback = "#111111") {
@@ -691,7 +698,6 @@ function SharedIntensityInput({ value, disabled = false, onChange }: { value?: n
           onChange({ idleStrength: next, hoverStrength: next });
         }}
       />
-      {disabled ? <small className="canvas-row-helper">hover intensity disabled</small> : null}
     </label>
   );
 }

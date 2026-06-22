@@ -9,6 +9,8 @@ const addLabels: Record<Extract<CanvasItemType, "text" | "image" | "video" | "au
   audio: "Audio",
 };
 
+const AUTOSAVE_OK = "\u2714";
+
 type CanvasToolbarProps = {
   canSave: boolean;
   saveState: "idle" | "saving" | "saved" | "error";
@@ -61,7 +63,7 @@ export function CanvasToolbar({
         Preview
       </button>
       <button type="button" className="canvas-tool-button canvas-tool-button-save" disabled={!canSave || saveState === "saving"} onClick={() => onSave()}>
-        {saveState === "saving" ? "Autosave ..." : "Autosave OK"}
+        {saveState === "saving" ? "Autosave ..." : saveState === "error" ? "Autosave error" : `Autosave ${AUTOSAVE_OK}`}
       </button>
     </div>
   );

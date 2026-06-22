@@ -13,7 +13,10 @@ type AsciiAudioPlayerProps = {
 
 const MIN_BAR_LENGTH = 4;
 const MAX_BAR_LENGTH = 80;
-const MAX_VOLUME_LEVEL = 5;
+const VOLUME_LEVEL_CHARS = ["\u2583", "\u2585", "\u2587", "\u2589"] as const;
+const MAX_VOLUME_LEVEL = VOLUME_LEVEL_CHARS.length;
+const TIMELINE_FILLED = "\u2588";
+const TIMELINE_EMPTY = "\u2591";
 
 function formatTime(value: number) {
   if (!Number.isFinite(value)) {
@@ -29,10 +32,11 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const barRef = useRef<HTMLButtonElement | null>(null);
   const barTextRef = useRef<HTMLSpanElement | null>(null);
+  const volumeBarsRef = useRef<HTMLSpanElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volumeLevel, setVolumeLevel] = useState(MAX_VOLUME_LEVEL);
+  const [volumeLevel, setVolumeLevel] = useState<number>(MAX_VOLUME_LEVEL);
   const [barLength, setBarLength] = useState(25);
   const [failed, setFailed] = useState(false);
 
@@ -64,6 +68,7 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
     audioEl.addEventListener("pause", syncPlaying);
     audioEl.addEventListener("ended", syncPlaying);
     audioEl.addEventListener("error", markFailed);
+    syncTime();
 
     return () => {
       audioEl.removeEventListener("timeupdate", syncTime);
@@ -94,21 +99,22 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
         return;
       }
       const fontSize = Number.parseFloat(window.getComputedStyle(textNode ?? node).fontSize) || 12;
-      const charWidth = (textNode?.getBoundingClientRect().width ?? 0) / Math.max(barLength, 1) || fontSize * 0.62;
+      const charCount = textNode?.textContent?.length ?? MIN_BAR_LENGTH;
+      const charWidth = (textNode?.getBoundingClientRect().width ?? 0) / Math.max(charCount, 1) || fontSize * 0.62;
       const nextLength = Math.min(MAX_BAR_LENGTH, Math.max(MIN_BAR_LENGTH, Math.floor(node.clientWidth / charWidth)));
-      setBarLength(nextLength);
+      setBarLength((current) => (current === nextLength ? current : nextLength));
     }
 
     const observer = new ResizeObserver(syncBarLength);
     observer.observe(node);
     syncBarLength();
     return () => observer.disconnect();
-  }, [barLength]);
+  }, []);
 
   const safeProgress = duration > 0 ? Math.min(Math.max(current / duration, 0), 1) : 0;
-  const filled = Math.min(barLength, Math.max(0, Math.round(safeProgress * barLength)));
+  const filled = safeProgress >= 1 ? barLength : Math.min(barLength, Math.max(0, Math.floor(safeProgress * barLength)));
   const empty = barLength - filled;
-  const bar = `${"#".repeat(filled)}${"-".repeat(empty)}`;
+  const bar = `${TIMELINE_FILLED.repeat(filled)}${TIMELINE_EMPTY.repeat(empty)}`;
   const visibleTitle = title?.trim();
 
   async function toggle() {
@@ -135,11 +141,16 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
       return;
     }
     const nextProgress = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
-    audio.currentTime = nextProgress * duration;
+    const nextCurrent = nextProgress * duration;
+    audio.currentTime = nextCurrent;
+    setCurrent(nextCurrent);
   }
 
   function setVolumeFromPointer(event: React.PointerEvent<HTMLButtonElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
+    const rect = volumeBarsRef.current?.getBoundingClientRect();
+    if (!rect?.width) {
+      return;
+    }
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     setVolumeLevel(Math.round(ratio * MAX_VOLUME_LEVEL));
   }
@@ -174,10 +185,10 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
           aria-label={`Volume level ${volumeLevel} of ${MAX_VOLUME_LEVEL}.`}
         >
           <span className="ascii-audio-volume-label">volume</span>
-          <span className="ascii-audio-volume-bars" aria-hidden="true">
-            {Array.from({ length: MAX_VOLUME_LEVEL }, (_, index) => (
+          <span ref={volumeBarsRef} className="ascii-audio-volume-bars" aria-hidden="true">
+            {VOLUME_LEVEL_CHARS.map((char, index) => (
               <span key={index} className={index < volumeLevel ? "is-active" : ""}>
-                |
+                {char}
               </span>
             ))}
           </span>

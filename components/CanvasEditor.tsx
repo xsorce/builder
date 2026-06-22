@@ -158,7 +158,7 @@ function mergeItemUpdates(item: CanvasItem, updates: Partial<CanvasItem>, mobile
     const currentWidth = updates.width ?? (mobileView ? item.mobile?.width ?? item.width : item.width);
     const currentHeight = updates.height ?? (mobileView ? item.mobile?.height ?? item.height : item.height);
     const minWidth = updates.fontSize * 22;
-    const minHeight = updates.fontSize * 6.2;
+    const minHeight = updates.fontSize * 4.5;
 
     updates = {
       ...updates,
@@ -1445,6 +1445,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             if (selected && start?.id === selected.id && isTextLike(selected)) {
               const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
               const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
+              const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
 
               if (!isCornerResize && !isHorizontalResize) {
                 return;
@@ -1453,47 +1454,75 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               const nextWidth = clampSize(width);
               const textNode = target.querySelector(".canvas-text-content");
 
-              if (isHorizontalResize) {
+              if (!shiftKey || isHorizontalResize) {
+                const widthScale = shiftKey && start.width ? nextWidth / start.width : 1;
+                const nextHeight = shiftKey && isHorizontalResize ? clampSize(start.height * widthScale) : isHorizontalResize ? start.height : clampSize(height);
+                const nextFontSize = shiftKey ? clampFontSize(start.fontSize * widthScale) : undefined;
+
                 target.style.width = `${nextWidth}px`;
-                target.style.height = `${start.height}px`;
-                setLiveTargetTransform(target, { width: nextWidth, autoFitText: false, x, y });
+                target.style.height = `${nextHeight}px`;
+
+                if (nextFontSize !== undefined && textNode instanceof HTMLElement) {
+                  textNode.style.fontSize = `${nextFontSize}px`;
+                }
+
+                const textUpdates: Partial<CanvasItem> = { width: nextWidth, height: nextHeight, autoFitText: false, x, y };
+                if (nextFontSize !== undefined) {
+                  textUpdates.fontSize = nextFontSize;
+                }
+
+                setLiveTargetTransform(target, textUpdates);
                 return;
               }
 
-              const nextHeight = clampSize(height);
-              const widthScale = start.width ? nextWidth / start.width : 1;
-              const nextFontSize = clampFontSize(start.fontSize * widthScale);
+              const scale = start.width && start.height ? Math.max(width / start.width, height / start.height) : 1;
+              const nextScaledWidth = clampSize(start.width * scale);
+              const nextScaledHeight = clampSize(start.height * scale);
+              const nextFontSize = clampFontSize(start.fontSize * scale);
 
-              target.style.width = `${nextWidth}px`;
-              target.style.height = `${nextHeight}px`;
+              target.style.width = `${nextScaledWidth}px`;
+              target.style.height = `${nextScaledHeight}px`;
 
               if (textNode instanceof HTMLElement) {
                 textNode.style.fontSize = `${nextFontSize}px`;
               }
 
-              setLiveTargetTransform(target, { width: nextWidth, height: nextHeight, fontSize: nextFontSize, autoFitText: false, x, y });
+              setLiveTargetTransform(target, { width: nextScaledWidth, height: nextScaledHeight, fontSize: nextFontSize, autoFitText: false, x, y });
               return;
             }
 
             if (selected && start?.id === selected.id && selected.type === "audio") {
               const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
               const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
+              const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
 
               if ((!isCornerResize && !isHorizontalResize) || !start.width || !start.height) {
                 return;
               }
 
-              const nextWidth = clampSize(width);
-              const nextHeight = isHorizontalResize ? start.height : clampSize(height);
+              const scale = shiftKey && isCornerResize ? Math.max(width / start.width, height / start.height) : 1;
+              const nextWidth = shiftKey && isCornerResize ? clampSize(start.width * scale) : clampSize(width);
+              const nextHeight = shiftKey && isCornerResize ? clampSize(start.height * scale) : isHorizontalResize ? start.height : clampSize(height);
+              const nextFontSize = shiftKey && isCornerResize ? clampFontSize(start.fontSize * scale) : undefined;
+              const audioPlayer = target.querySelector(".ascii-audio-player");
 
               target.style.width = `${nextWidth}px`;
               target.style.height = `${nextHeight}px`;
-              setLiveTargetTransform(target, {
+              if (nextFontSize !== undefined && audioPlayer instanceof HTMLElement) {
+                audioPlayer.style.fontSize = `${nextFontSize}px`;
+              }
+              const audioUpdates: Partial<CanvasItem> = {
                 width: nextWidth,
                 height: nextHeight,
                 x,
                 y,
-              });
+              };
+
+              if (nextFontSize !== undefined) {
+                audioUpdates.fontSize = nextFontSize;
+              }
+
+              setLiveTargetTransform(target, audioUpdates);
               return;
             }
 
@@ -1501,8 +1530,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               const cropUpdates = getCropUpdates(start, drag.dist ?? [0, 0], editorScale, direction);
               target.style.width = `${start.width}px`;
               target.style.height = `${start.height}px`;
+              target.style.transform = itemTransform({ ...selected, x: start.x, y: start.y });
               applyImageCropStyle(target, cropUpdates);
-              setLiveTargetTransform(target, { ...cropUpdates, x: start.x, y: start.y, width: start.width, height: start.height });
+              transformDraftRef.current = { ...transformDraftRef.current, ...cropUpdates };
               return;
             }
 

@@ -91,6 +91,15 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
     setPasswordUnlocked(window.sessionStorage.getItem(getPasswordStorageKey(canvas.slug)) === "1");
   }, [canvas.password, canvas.slug, editMode]);
 
+  useEffect(() => {
+    if (!passwordWrong) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setPasswordWrong(false), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [passwordWrong]);
+
   useLayoutEffect(() => {
     if (editMode) {
       return;
@@ -173,9 +182,16 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
           }}
         >
           <div>Password</div>
-          <input value={passwordValue} onChange={(event) => setPasswordValue(event.target.value)} autoComplete="current-password" />
+          <input
+            value={passwordValue}
+            onChange={(event) => {
+              setPasswordValue(event.target.value);
+              setPasswordWrong(false);
+            }}
+            autoComplete="current-password"
+          />
           <button type="submit">Enter</button>
-          {passwordWrong ? <small>wrong password</small> : null}
+          <small>{passwordWrong ? "wrong password" : "\u00a0"}</small>
         </form>
       </main>
     );
