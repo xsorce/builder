@@ -318,23 +318,17 @@ function clampCrop(value: number, opposite = 0) {
 }
 
 function applyImageCropStyle(target: HTMLElement | SVGElement, updates: ReturnType<typeof getCropUpdates>) {
-  const cropTargets = target.querySelectorAll(".canvas-image-fill, .canvas-svg-image-fill, .canvas-recolor-overlay, .canvas-hover-color-overlay");
+  const cropTarget = target.querySelector(".canvas-image-crop-layer");
 
-  if (!cropTargets.length) {
+  if (!(cropTarget instanceof HTMLElement)) {
     return;
   }
 
   const width = Math.max(1, 100 - (updates.cropLeft ?? 0) - (updates.cropRight ?? 0));
   const height = Math.max(1, 100 - (updates.cropTop ?? 0) - (updates.cropBottom ?? 0));
-  cropTargets.forEach((cropTarget) => {
-    if (!(cropTarget instanceof HTMLElement)) {
-      return;
-    }
-
-    cropTarget.style.width = `${10000 / width}%`;
-    cropTarget.style.height = `${10000 / height}%`;
-    cropTarget.style.transform = `translate(${-(updates.cropLeft ?? 0)}%, ${-(updates.cropTop ?? 0)}%)`;
-  });
+  cropTarget.style.width = `${10000 / width}%`;
+  cropTarget.style.height = `${10000 / height}%`;
+  cropTarget.style.transform = `translate(${-(updates.cropLeft ?? 0)}%, ${-(updates.cropTop ?? 0)}%)`;
 }
 
 function needsMobileOverride(item: CanvasItem) {
@@ -571,7 +565,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const selectedItem = useMemo(() => effectiveItems.find((item) => item.id === selectedId), [effectiveItems, selectedId]);
   const selectedItems = useMemo(() => effectiveItems.filter((item) => selectedIds.includes(item.id)), [effectiveItems, selectedIds]);
   const selectedTextLike = Boolean(selectedItem && isTextLike(selectedItem));
-  const renderDirections = selectedTextLike || selectedItem?.type === "audio" ? ["nw", "ne", "sw", "se", "w", "e"] : undefined;
+  const renderDirections = selectedTextLike ? ["nw", "ne", "sw", "se", "w", "e"] : selectedItem?.type === "audio" ? ["nw", "ne", "sw", "se", "n", "s", "w", "e"] : undefined;
   const moveableTarget = selectedIds.length > 1 ? selectedTargets : selectedTarget;
   const groupSelected = Array.isArray(moveableTarget);
   const moveableKey = `${selectedItem?.id ?? "none"}-${selectedItem?.type ?? "none"}-${selectedIds.join("_")}-${renderDirections?.join("-") ?? "all"}`;
@@ -1603,19 +1597,19 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
             if (selected && start?.id === selected.id && selected.type === "audio") {
               const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
-              const isHorizontalResize = Boolean(direction?.[0] && !direction?.[1]);
+              const isSideResize = !isCornerResize;
               const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
-              const wrappingOnly = shiftKey || modifierKey;
+              const wrappingOnly = isSideResize || shiftKey || modifierKey;
 
-              if ((!isCornerResize && !isHorizontalResize) || !start.width || !start.height) {
+              if ((!isCornerResize && !isSideResize) || !start.width || !start.height) {
                 return;
               }
 
-              const nextWidth = clampSize(width);
-              const nextHeight = isHorizontalResize ? start.height : clampSize(height);
-              const widthScale = nextWidth / start.width;
-              const heightScale = nextHeight / start.height;
-              const resizeScale = isCornerResize ? Math.min(widthScale, heightScale) : widthScale;
+              const widthScale = width / start.width;
+              const heightScale = height / start.height;
+              const resizeScale = isCornerResize && !wrappingOnly ? Math.max(widthScale, heightScale) : 1;
+              const nextWidth = isCornerResize && !wrappingOnly ? clampSize(start.width * resizeScale) : clampSize(width);
+              const nextHeight = isCornerResize && !wrappingOnly ? clampSize(start.height * resizeScale) : clampSize(height);
               const nextFontSize = wrappingOnly ? undefined : clampFontSize(start.fontSize * resizeScale);
               const audioPlayer = target.querySelector(".ascii-audio-player");
 

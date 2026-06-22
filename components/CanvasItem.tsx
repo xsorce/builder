@@ -46,44 +46,48 @@ export function CanvasItem({ item, editMode = false, editing = false, selected =
       opacity: isHiddenInEditor ? 0.7 : commonStyle.opacity,
     };
     const isSvg = typeof item.src === "string" && item.src.toLowerCase().split("?")[0].endsWith(".svg");
+    const hasRecolorOverlay = recolorIntensity > 0 && Boolean(item.src);
+    const svgBaseStyle = {
+      backgroundImage: item.src ? `url("${item.src}")` : undefined,
+      opacity: isSvg && hasRecolorOverlay ? 0 : undefined,
+    };
 
     return (
       <MediaWithLabels item={item} editMode={editMode}>
-        <div className="canvas-recolor-wrap" style={imageStyle}>
-          {isSvg ? (
-            <div className="canvas-svg-image-fill" style={{ backgroundImage: item.src ? `url("${item.src}")` : undefined, ...cropStyle }} />
-          ) : (
-            <img
-              src={item.src}
-              alt={item.text ?? item.title ?? ""}
-              className="canvas-image-fill"
-              style={cropStyle}
-              draggable={false}
-              onError={() => setFailed(true)}
-            />
-          )}
-          {recolorIntensity > 0 && item.src ? (
-            <span
-              className="canvas-recolor-overlay"
-              style={{
-                backgroundColor: recolorColor,
-                opacity: recolorIntensity,
-                WebkitMaskImage: `url("${item.src}")`,
-                maskImage: `url("${item.src}")`,
-                ...cropStyle,
-              }}
-            />
-          ) : null}
-          {item.src ? (
-            <span
-              className="canvas-hover-color-overlay"
-              style={{
-                WebkitMaskImage: `url("${item.src}")`,
-                maskImage: `url("${item.src}")`,
-                ...cropStyle,
-              }}
-            />
-          ) : null}
+        <div className={`canvas-recolor-wrap${isSvg && hasRecolorOverlay ? " canvas-image-has-recolor-overlay" : ""}`} style={imageStyle}>
+          <div className="canvas-image-crop-layer" style={cropStyle}>
+            {isSvg ? (
+              <div className="canvas-svg-image-fill" style={svgBaseStyle} />
+            ) : (
+              <img
+                src={item.src}
+                alt={item.text ?? item.title ?? ""}
+                className="canvas-image-fill"
+                draggable={false}
+                onError={() => setFailed(true)}
+              />
+            )}
+            {hasRecolorOverlay ? (
+              <span
+                className="canvas-recolor-overlay"
+                style={{
+                  backgroundColor: recolorColor,
+                  opacity: recolorIntensity,
+                  WebkitMaskImage: `url("${item.src}")`,
+                  maskImage: `url("${item.src}")`,
+                }}
+              />
+            ) : null}
+            {item.src ? (
+              <span
+                className="canvas-hover-color-overlay"
+                style={{
+                  WebkitMaskImage: `url("${item.src}")`,
+                  maskImage: `url("${item.src}")`,
+                }}
+              />
+            ) : null}
+          </div>
         </div>
       </MediaWithLabels>
     );
