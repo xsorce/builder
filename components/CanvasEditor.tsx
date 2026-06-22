@@ -1682,8 +1682,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             let nextWidth = clampSize(width);
             let nextHeight = clampSize(height);
             const shiftKey = Boolean(inputEvent && "shiftKey" in inputEvent && inputEvent.shiftKey);
+            const isCornerResize = Boolean(direction?.[0] && direction?.[1]);
 
-            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && start.width && start.height) {
+            if (selected && start?.id === selected.id && (selected.type === "image" || selected.type === "video") && shiftKey && isCornerResize && start.width && start.height) {
               const lockedResize = getCornerRatioResize(start, direction, x, y, width, height);
               nextWidth = lockedResize.width;
               nextHeight = lockedResize.height;
