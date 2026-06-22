@@ -1,12 +1,12 @@
 [
   {
-    "slug": "",
-    "title": "Starter Page",
-    "file": "default.json"
+    "slug": "starter",
+    "title": "Starter",
+    "file": "starter.json"
   },
   {
-    "slug": "a",
-    "title": "a",
-    "file": "a.json"
+    "slug": "",
+    "title": "Home",
+    "file": "default.json"
   }
 ]

@@ -27,7 +27,7 @@ const QUICK_TOOLS_ICON = "\u274a";
 const DRAFT_STORAGE_PREFIX = "web-builder-draft:";
 const DRAFT_SAVE_DELAY = 600;
 const BETA_SPLASH_STORAGE_KEY = "xsorce-webrooms-splash-seen";
-const SPLASH_FADE_OUT_MS = 900;
+const SPLASH_FADE_OUT_MS = 1200;
 
 type CanvasEditorProps = {
   initialCanvas: CanvasDocument;
@@ -1529,11 +1529,6 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           >
             Show Welcome Splash
           </button>
-          {draftStatus ? (
-            <p className="canvas-quick-tools-status" title="Layout backup saved in this browser. Export JSON before closing.">
-              {draftStatus}
-            </p>
-          ) : null}
         </div>
         <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importProjectJson} />
       </div>

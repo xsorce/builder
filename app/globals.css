@@ -923,11 +923,28 @@ input {
   padding: clamp(18px, 4vh, 48px) 1rem 2rem;
   background: rgba(247, 246, 240, 0.62);
   backdrop-filter: blur(24px);
+  opacity: 1;
+  transition:
+    opacity 1200ms ease,
+    backdrop-filter 1200ms ease,
+    background-color 1200ms ease;
   animation: webroomsSplashIn 1600ms ease both;
 }
 
 .webrooms-splash-overlay.is-closing {
-  animation: webroomsSplashOut 900ms ease forwards;
+  background: rgba(247, 246, 240, 0) !important;
+  opacity: 0 !important;
+  pointer-events: none;
+  backdrop-filter: blur(0) !important;
+  animation: none !important;
+}
+
+.webrooms-splash-overlay.is-closing .webrooms-splash-card {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition:
+    opacity 900ms ease,
+    transform 900ms ease;
 }
 
 .webrooms-splash-card {
@@ -1890,13 +1907,6 @@ input {
   }
 }
 
-@keyframes webroomsSplashOut {
-  to {
-    opacity: 0;
-    backdrop-filter: blur(0);
-  }
-}
-
 @keyframes webroomsSplashLineIn {
   from {
     opacity: 0;
@@ -2023,7 +2033,6 @@ input {
   .asset-picker-overlay,
   .asset-picker-panel,
   .canvas-quick-tools-toast,
-  .webrooms-splash-overlay,
   .webrooms-splash-logo,
   .webrooms-splash-intro,
   .webrooms-splash-note,

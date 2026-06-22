@@ -62,7 +62,13 @@ export function CanvasToolbar({
       <button type="button" className="canvas-tool-button canvas-tool-button-preview" onClick={onView}>
         Preview
       </button>
-      <button type="button" className="canvas-tool-button canvas-tool-button-save" disabled={!canSave || saveState === "saving"} onClick={() => onSave()}>
+      <button
+        type="button"
+        className="canvas-tool-button canvas-tool-button-save"
+        disabled={!canSave || saveState === "saving"}
+        onClick={() => onSave()}
+        title="Layout backup saved in this browser. Export JSON before closing."
+      >
         {saveState === "saving" ? "Autosave ..." : saveState === "error" ? "Autosave error" : `Autosave ${AUTOSAVE_OK}`}
       </button>
     </div>
