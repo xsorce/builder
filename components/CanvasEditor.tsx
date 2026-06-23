@@ -696,7 +696,7 @@ function createBlankProject(name: string, spaceId: string): ProjectJsonImport {
 }
 
 function updateProjectCanvas(project: ProjectJsonImport, canvas: CanvasDocument, space: PageBuilderSpace) {
-  const currentSlug = project.currentSlug ?? "";
+  const currentSlug = getCanvasRouteSlug(canvas);
   const pageIndex = project.pages.findIndex((page) => page.slug === currentSlug);
   const nextPage = {
     slug: currentSlug,
@@ -769,8 +769,21 @@ function getAssetFileName(src: string) {
   return decodeURIComponent(pathname.split("/").pop() || "asset");
 }
 
+function getZipAssetKind(pathname: string): AssetKind | null {
+  const normalized = pathname.replace(/\\/g, "/").toLowerCase();
+  const folder = normalized.match(/(?:^|\/)(images|videos|audio)\//)?.[1] as AssetKind | undefined;
+  if (!folder) {
+    return null;
+  }
+  return folder;
+}
+
 function getProjectFolderName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+}
+
+function getProjectPagePath(projectSlug: string, pageSlug: string) {
+  return `/${projectSlug}/${pageSlug || "home"}`;
 }
 
 function collectReferencedAssetSources(project: ProjectJsonImport) {
@@ -868,6 +881,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const effectiveItems = useMemo(() => canvas.items.map((item) => getEffectiveItem(item, mobileView)), [canvas.items, mobileView]);
   const selectedItem = useMemo(() => effectiveItems.find((item) => item.id === selectedId), [effectiveItems, selectedId]);
   const selectedItems = useMemo(() => effectiveItems.filter((item) => selectedIds.includes(item.id)), [effectiveItems, selectedIds]);
+  const activeSpace = useMemo(() => spaces.find((space) => space.id === activeSpaceId), [activeSpaceId, spaces]);
+  const useProjectScopedPages = Boolean(activeSpace && (isLocalOnlySpace(activeSpace, spaces) || activeSpace.project.pages.length > 1));
+  const activeProjectPages = useMemo(() => (useProjectScopedPages ? activeSpace?.project.pages.map(({ slug, title, file }) => ({ slug, title, file })) : undefined), [activeSpace, useProjectScopedPages]);
   const selectedTextLike = Boolean(selectedItem && isTextLike(selectedItem));
   const renderDirections = selectedTextLike ? ["nw", "ne", "sw", "se", "w", "e"] : selectedItem?.type === "audio" ? ["nw", "ne", "sw", "se", "n", "s", "w", "e"] : undefined;
   const moveableTarget = selectedIds.length > 1 ? selectedTargets : selectedTarget;
@@ -877,6 +893,17 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   useEffect(() => {
     canvasRef.current = canvas;
   }, [canvas]);
+
+  useEffect(() => {
+    if (!activeSpace || !new URLSearchParams(window.location.search).get("edit")) {
+      return;
+    }
+
+    const path = `${getProjectPagePath(activeSpace.assetFolder, getCanvasRouteSlug(canvas))}?edit=1`;
+    if (`${window.location.pathname}${window.location.search}` !== path) {
+      window.history.replaceState(null, "", path);
+    }
+  }, [activeSpace, canvas]);
 
   useEffect(() => {
     try {
@@ -1027,10 +1054,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }, []);
 
   function saveActiveSpaceSnapshot(nextCanvas: CanvasDocument) {
-    const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-    if (!activeSpace || !isLocalOnlySpace(activeSpace, spaces)) {
-      return;
-    }
+      if (!activeSpace || !isLocalOnlySpace(activeSpace, spaces)) {
+        return;
+      }
 
     updateSpaceSnapshot(activeSpace.id, updateProjectCanvas(activeSpace.project, nextCanvas, activeSpace));
   }
@@ -1472,7 +1498,18 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }
 
   function openRealPage() {
-    const baseUrl = canvasRef.current.slug === "home" || canvasRef.current.slug === "index" ? "/" : `/${canvasRef.current.slug}`;
+    const baseUrl = activeSpace ? getProjectPagePath(activeSpace.assetFolder, getCanvasRouteSlug(canvasRef.current)) : canvasRef.current.slug === "home" || canvasRef.current.slug === "index" ? "/" : `/${canvasRef.current.slug}`;
+    if (activeSpace) {
+      const project = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+      window.sessionStorage.setItem("pagebuilder-preview-canvas", JSON.stringify(getProjectCanvas(project, canvasRef.current) ?? canvasRef.current));
+      const params = new URLSearchParams({ previewCanvas: "1" });
+      if (mobileView) {
+        params.set("view", "mobile");
+      }
+      window.open(`${baseUrl}?${params}`, "_blank", "noopener,noreferrer");
+      return;
+    }
+
     const url = mobileView ? `${baseUrl}?view=mobile` : baseUrl;
     window.open(url, "_blank", "noopener,noreferrer");
   }
@@ -1913,6 +1950,26 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     showQuickToolsToast(`Opened ${space.name}.`);
   }
 
+  function openProjectPage(slug: string) {
+    if (!activeSpace) {
+      return;
+    }
+
+    saveActiveSpaceSnapshot(canvasRef.current);
+    const page = activeSpace.project.pages.find((projectPage) => projectPage.slug === slug) ?? activeSpace.project.pages.find((projectPage) => projectPage.slug === "") ?? activeSpace.project.pages[0];
+    if (!page) {
+      return;
+    }
+
+    setCanvas(page.canvas);
+    canvasRef.current = page.canvas;
+    setSelectedId(undefined);
+    setSelectedIds([]);
+    setEditingTextId(undefined);
+    window.history.pushState(null, "", `${getProjectPagePath(activeSpace.assetFolder, page.slug)}?edit=1`);
+    setSpaces((current) => current.map((space) => (space.id === activeSpace.id ? { ...space, project: { ...space.project, currentSlug: page.slug } } : space)));
+  }
+
   function deleteSpace(space: PageBuilderSpace) {
     if (spaces[0]?.id === space.id || space.name.trim().toLowerCase() === "project1" || !window.confirm("This will delete the entire project. Continue?")) {
       return;
@@ -1949,6 +2006,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
     try {
       let parsed: unknown;
+      let assetReplacements = new Map<string, string>();
       if (file.name.toLowerCase().endsWith(".zip")) {
         const zip = await JSZip.loadAsync(file);
         const projectFile = zip.file("pagebuilder-project.json");
@@ -1956,6 +2014,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           throw new Error("Missing pagebuilder-project.json.");
         }
         parsed = JSON.parse(await projectFile.async("string")) as unknown;
+        if (activeSpace) {
+          assetReplacements = await importZipAssets(zip, activeSpace.assetFolder);
+          parsed = rewriteImportedAssetPaths(parsed, assetReplacements);
+        }
       } else {
         parsed = JSON.parse(await file.text()) as unknown;
       }
@@ -1993,6 +2055,57 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     } catch {
       setEditorWarning("Invalid project JSON or ZIP.");
     }
+  }
+
+  async function importZipAssets(zip: JSZip, projectFolder: string) {
+    const replacements = new Map<string, string>();
+
+    await Promise.all(
+      Object.values(zip.files).map(async (entry) => {
+        if (entry.dir) {
+          return;
+        }
+
+        const kind = getZipAssetKind(entry.name);
+        if (!kind) {
+          return;
+        }
+
+        const filename = getAssetFileName(entry.name);
+        const blob = await entry.async("blob");
+        const formData = new FormData();
+        formData.append("kind", kind);
+        formData.append("projectFolder", projectFolder);
+        formData.append("file", new File([blob], filename));
+        const response = await fetch("/api/dev-assets/upload", { method: "POST", body: formData });
+        if (!response.ok) {
+          return;
+        }
+
+        const uploaded = (await response.json()) as AssetFile;
+        replacements.set(`${kind}/${filename}`, uploaded.src);
+      }),
+    );
+
+    return replacements;
+  }
+
+  function rewriteImportedAssetPaths(value: unknown, replacements: Map<string, string>): unknown {
+    if (!replacements.size) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const filename = getAssetFileName(value);
+      const folder = getZipAssetKind(value);
+      return folder ? replacements.get(`${folder}/${filename}`) ?? value : value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => rewriteImportedAssetPaths(item, replacements));
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteImportedAssetPaths(item, replacements)]));
+    }
+    return value;
   }
 
   function getSpawnPosition(item: Pick<CanvasItem, "width" | "height">) {
@@ -2215,7 +2328,12 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       style={{ minHeight: mobileView ? "100dvh" : artboardHeight * editorScale, backgroundColor: mobileView ? undefined : canvas.backgroundColor ?? "#fafaf7" }}
     >
       {canvas.backgroundImage ? <div className="canvas-page-background-image" style={getBackgroundImageStyle(canvas)} /> : null}
-      <PageBuilderPanel currentSlug={canvas.slug} />
+      <PageBuilderPanel
+        currentSlug={getCanvasRouteSlug(canvas)}
+        pagesOverride={activeProjectPages}
+        onSelectPage={useProjectScopedPages ? openProjectPage : undefined}
+        getPageHref={activeSpace ? (slug) => `${getProjectPagePath(activeSpace.assetFolder, slug)}?edit=1` : undefined}
+      />
       <CanvasToolbar
         canSave={canSave}
         saveState={saveState}

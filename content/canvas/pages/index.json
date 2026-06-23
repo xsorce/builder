@@ -8,5 +8,20 @@
     "slug": "",
     "title": "Home",
     "file": "default.json"
+  },
+  {
+    "slug": "home-copy",
+    "title": "Home Copy",
+    "file": "home-copy.json"
+  },
+  {
+    "slug": "home-copy-2",
+    "title": "Home Copy",
+    "file": "home-copy-2.json"
+  },
+  {
+    "slug": "home-copy-3",
+    "title": "Home Copy",
+    "file": "home-copy-3.json"
   }
 ]

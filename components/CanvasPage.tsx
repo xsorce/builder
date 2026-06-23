@@ -45,12 +45,14 @@ type CanvasPageProps = {
 };
 
 export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
+  const [previewCanvas, setPreviewCanvas] = useState<CanvasDocument | null>(null);
   const [viewportWidth, setViewportWidth] = useState<number | null>(null);
   const [forcedMobilePreview, setForcedMobilePreview] = useState(false);
   const [passwordValue, setPasswordValue] = useState("");
   const [passwordWrong, setPasswordWrong] = useState(false);
   const [passwordUnlocked, setPasswordUnlocked] = useState(false);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const currentCanvas = previewCanvas ?? canvas;
 
   useLayoutEffect(() => {
     function updateWidth() {
@@ -59,14 +61,28 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
 
     updateWidth();
     setForcedMobilePreview(new URLSearchParams(window.location.search).get("view") === "mobile");
+    if (!editMode) {
+      try {
+        const [, projectSlug, rawPageSlug] = window.location.pathname.split("/");
+        const storedCanvas = window.sessionStorage.getItem("pagebuilder-preview-canvas");
+        const storedSpaces = window.localStorage.getItem("pagebuilder-spaces-v1");
+        const spaces = storedSpaces ? (JSON.parse(storedSpaces) as Array<{ assetFolder?: string; project?: { pages?: Array<{ slug: string; canvas: CanvasDocument }> } }>) : [];
+        const project = spaces.find((space) => space.assetFolder === projectSlug)?.project;
+        const pageSlug = rawPageSlug === "home" ? "" : rawPageSlug ?? "";
+        const page = project?.pages?.find((projectPage) => projectPage.slug === pageSlug) ?? project?.pages?.find((projectPage) => projectPage.slug === "") ?? project?.pages?.[0];
+        setPreviewCanvas(page?.canvas ?? (new URLSearchParams(window.location.search).get("previewCanvas") === "1" && storedCanvas ? (JSON.parse(storedCanvas) as CanvasDocument) : null));
+      } catch {
+        setPreviewCanvas(null);
+      }
+    }
     window.addEventListener("resize", updateWidth);
     return () => window.removeEventListener("resize", updateWidth);
-  }, []);
+  }, [editMode]);
 
   const mobilePreview = !editMode && viewportWidth !== null && (forcedMobilePreview || viewportWidth <= MOBILE_PARALLAX_CUTOFF);
   const artboardWidth = mobilePreview ? MOBILE_ARTBOARD_WIDTH : ARTBOARD_WIDTH;
-  const artboardHeight = mobilePreview ? canvas.mobileHeight ?? MOBILE_ARTBOARD_HEIGHT : canvas.height;
-  const effectiveItems = useMemo(() => canvas.items.map((item) => (mobilePreview ? getMobilePreviewItem(item) : item)), [canvas.items, mobilePreview]);
+  const artboardHeight = mobilePreview ? currentCanvas.mobileHeight ?? MOBILE_ARTBOARD_HEIGHT : currentCanvas.height;
+  const effectiveItems = useMemo(() => currentCanvas.items.map((item) => (mobilePreview ? getMobilePreviewItem(item) : item)), [currentCanvas.items, mobilePreview]);
   const scale = useMemo(() => {
     if (forcedMobilePreview && viewportWidth !== null) {
       return Math.max(0.2, Math.min((viewportWidth - 32) / artboardWidth, (window.innerHeight - 32) / artboardHeight));
@@ -76,20 +92,20 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
   }, [artboardHeight, artboardWidth, forcedMobilePreview, viewportWidth]);
   const canvasReady = viewportWidth !== null;
   const shellClassName = `canvas-shell${forcedMobilePreview ? " canvas-shell-mobile-preview" : ""}`;
-  const pagePassword = canvas.password?.trim();
+  const pagePassword = currentCanvas.password?.trim();
 
   useEffect(() => {
-    document.title = editMode ? `Editing ${canvas.slug || "home"}` : canvas.title;
-  }, [canvas.slug, canvas.title, editMode]);
+    document.title = currentCanvas.title || currentCanvas.slug || "project";
+  }, [currentCanvas.slug, currentCanvas.title]);
 
   useEffect(() => {
-    if (editMode || !canvas.password?.trim()) {
+    if (editMode || !currentCanvas.password?.trim()) {
       setPasswordUnlocked(false);
       return;
     }
 
-    setPasswordUnlocked(window.sessionStorage.getItem(getPasswordStorageKey(canvas.slug)) === "1");
-  }, [canvas.password, canvas.slug, editMode]);
+    setPasswordUnlocked(window.sessionStorage.getItem(getPasswordStorageKey(currentCanvas.slug)) === "1");
+  }, [currentCanvas.password, currentCanvas.slug, editMode]);
 
   useEffect(() => {
     if (!passwordWrong) {
@@ -162,7 +178,7 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
   }, [effectiveItems, editMode, forcedMobilePreview]);
 
   if (editMode) {
-    return <CanvasEditor initialCanvas={canvas} scale={scale} />;
+    return <CanvasEditor initialCanvas={currentCanvas} scale={scale} />;
   }
 
   if (pagePassword && !passwordUnlocked) {
@@ -173,7 +189,7 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
           onSubmit={(event) => {
             event.preventDefault();
             if (passwordValue === pagePassword) {
-              window.sessionStorage.setItem(getPasswordStorageKey(canvas.slug), "1");
+              window.sessionStorage.setItem(getPasswordStorageKey(currentCanvas.slug), "1");
               setPasswordUnlocked(true);
               setPasswordWrong(false);
             } else {
@@ -223,8 +239,8 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
   }
 
   return (
-    <main className={shellClassName} onClick={keepForcedMobileLinks} style={{ minHeight: forcedMobilePreview ? "100dvh" : artboardHeight * scale, visibility: canvasReady ? "visible" : "hidden", backgroundColor: forcedMobilePreview ? undefined : canvas.backgroundColor ?? "#fafaf7" }}>
-      {canvas.backgroundImage ? <div className="canvas-page-background-image" style={getBackgroundImageStyle(canvas)} /> : null}
+    <main className={shellClassName} onClick={keepForcedMobileLinks} style={{ minHeight: forcedMobilePreview ? "100dvh" : artboardHeight * scale, visibility: canvasReady ? "visible" : "hidden", backgroundColor: forcedMobilePreview ? undefined : currentCanvas.backgroundColor ?? "#fafaf7" }}>
+      {currentCanvas.backgroundImage ? <div className="canvas-page-background-image" style={getBackgroundImageStyle(currentCanvas)} /> : null}
       <div
         className="canvas-artboard"
         style={{
@@ -234,10 +250,10 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
           top: forcedMobilePreview ? "50%" : 0,
           transform: forcedMobilePreview ? `translate(-50%, -50%) scale(${scale})` : `scale(${scale}) translateX(-50%)`,
           transformOrigin: forcedMobilePreview ? "center center" : "top left",
-          backgroundColor: canvas.backgroundColor ?? "#fafaf7",
+          backgroundColor: currentCanvas.backgroundColor ?? "#fafaf7",
         }}
       >
-        {canvas.backgroundImage ? <div className="canvas-background-image" style={getBackgroundImageStyle(canvas)} /> : null}
+        {currentCanvas.backgroundImage ? <div className="canvas-background-image" style={getBackgroundImageStyle(currentCanvas)} /> : null}
         {effectiveItems.filter((item) => !item.hidden).map((item) => (
           <div
             key={item.id}

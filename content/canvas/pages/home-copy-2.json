@@ -1,0 +1,27 @@
+{
+  "slug": "home-copy-2",
+  "title": "Home Copy",
+  "height": 810,
+  "mobileHeight": 844,
+  "backgroundColor": "#fafaf7",
+  "items": [
+    {
+      "id": "text-1782193306281-0",
+      "type": "text",
+      "x": 583.24,
+      "y": 293.44,
+      "width": 268,
+      "height": 74,
+      "rotate": 0,
+      "zIndex": 2,
+      "opacity": 1,
+      "locked": false,
+      "fontSize": 24,
+      "fontWeight": 600,
+      "fontFamily": "body",
+      "color": "#111111",
+      "autoFitText": false,
+      "text": "new textjkhjkkkkhjhhhhhhhhhhhh"
+    }
+  ]
+}

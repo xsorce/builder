@@ -5,6 +5,9 @@ import type { CanvasPageRegistryEntry } from "@/content/canvas";
 
 type PageBuilderPanelProps = {
   currentSlug: string;
+  pagesOverride?: CanvasPageRegistryEntry[];
+  onSelectPage?: (slug: string) => void;
+  getPageHref?: (slug: string) => string;
 };
 
 function displayPath(slug: string) {
@@ -21,7 +24,7 @@ function slugify(value: string) {
     .replace(/^-|-$/g, "");
 }
 
-export function PageBuilderPanel({ currentSlug }: PageBuilderPanelProps) {
+export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, getPageHref }: PageBuilderPanelProps) {
   const [pages, setPages] = useState<CanvasPageRegistryEntry[]>([]);
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
@@ -42,6 +45,11 @@ export function PageBuilderPanel({ currentSlug }: PageBuilderPanelProps) {
   const editingProtectedPage = mode === "edit" && editingOldSlug === "";
 
   useEffect(() => {
+    if (pagesOverride) {
+      setPages(pagesOverride);
+      return;
+    }
+
     let active = true;
 
     fetch("/api/dev-pages/list")
@@ -56,7 +64,7 @@ export function PageBuilderPanel({ currentSlug }: PageBuilderPanelProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [pagesOverride]);
 
   function updateTitle(nextTitle: string) {
     setTitle(nextTitle);
@@ -230,8 +238,14 @@ export function PageBuilderPanel({ currentSlug }: PageBuilderPanelProps) {
           <a
             key={page.file}
             className={`page-builder-row ${page.slug === currentSlug ? "is-active" : ""}`}
-            href={`${displayPath(page.slug)}?edit=1`}
+            href={getPageHref ? getPageHref(page.slug) : `${displayPath(page.slug)}?edit=1`}
             onClick={(event) => {
+              if (onSelectPage) {
+                event.preventDefault();
+                onSelectPage(page.slug);
+                return;
+              }
+
               if (page.slug !== currentSlug) {
                 return;
               }
