@@ -144,7 +144,7 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
         setShapeAssets([]);
       }
     } catch {
-      setMessage("Asset list failed.");
+      setMessage("Could not load deployed assets.");
     } finally {
       setLoading(false);
     }

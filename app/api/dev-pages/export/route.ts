@@ -4,20 +4,7 @@ import { NextResponse } from "next/server";
 import { canvasPagesDir, readCanvasPageRegistry } from "@/content/canvas/pages";
 import type { CanvasDocument } from "@/content/canvas";
 
-function isLocalHost(host: string | null) {
-  const hostname = host?.split(":")[0];
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
-export async function GET(request: Request) {
-  if (process.env.NODE_ENV !== "development") {
-    return NextResponse.json({ error: "Project export is disabled in production." }, { status: 403 });
-  }
-
-  if (!isLocalHost(request.headers.get("host"))) {
-    return NextResponse.json({ error: "Project export is local-only." }, { status: 403 });
-  }
-
+export async function GET() {
   const registry = await readCanvasPageRegistry();
   const pages = await Promise.all(
     registry.map(async (page) => {

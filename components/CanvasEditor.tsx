@@ -581,6 +581,26 @@ function isCanvasImport(value: unknown): value is CanvasDocument {
   return Boolean(value && typeof value === "object" && Array.isArray((value as CanvasDocument).items) && typeof (value as CanvasDocument).title === "string");
 }
 
+type ProjectJsonImport = {
+  type: "web-builder-project";
+  currentSlug?: string;
+  pages: Array<{ slug: string; title: string; file: string; canvas: CanvasDocument }>;
+};
+
+function isProjectJsonImport(value: unknown): value is ProjectJsonImport {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as ProjectJsonImport).type === "web-builder-project" &&
+      Array.isArray((value as ProjectJsonImport).pages) &&
+      (value as ProjectJsonImport).pages.every((page) => page && typeof page === "object" && isCanvasImport((page as ProjectJsonImport["pages"][number]).canvas)),
+  );
+}
+
+function getCanvasRouteSlug(canvas: Pick<CanvasDocument, "slug">) {
+  return canvas.slug === "home" || canvas.slug === "index" ? "" : canvas.slug;
+}
+
 function getDraftStorageKey(canvas: Pick<CanvasDocument, "slug" | "title">) {
   const id = canvas.slug || canvas.title || "untitled";
   return `${DRAFT_STORAGE_PREFIX}${id}`;
@@ -1191,23 +1211,17 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }
 
   async function exportProjectJson() {
+    const currentCanvas = canvasRef.current;
+    const currentSlug = getCanvasRouteSlug(currentCanvas);
+
     try {
-      const currentCanvas = canvasRef.current;
-      const currentSlug = currentCanvas.slug === "home" || currentCanvas.slug === "index" ? "" : currentCanvas.slug;
       const response = await fetch("/api/dev-pages/export");
 
       if (!response.ok) {
-        setEditorWarning("Project export failed.");
-        return;
+        throw new Error("Project export failed.");
       }
 
-      const project = (await response.json()) as {
-        type: "web-builder-project";
-        version: number;
-        exportedAt: string;
-        currentSlug: string;
-        pages: Array<{ slug: string; title: string; file: string; canvas: CanvasDocument }>;
-      };
+      const project = (await response.json()) as ProjectJsonImport & { version: number; exportedAt: string };
       const exportData = {
         ...project,
         exportedAt: new Date().toISOString(),
@@ -1221,9 +1235,17 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       link.click();
       URL.revokeObjectURL(url);
       setQuickToolsOpen(false);
-      setDraftStatus("Exported JSON. Keep a backup of your asset folders.");
+      showQuickToolsToast("Exported project JSON.");
     } catch {
-      setEditorWarning("Project export failed.");
+      const slug = (currentCanvas.slug || currentCanvas.title || "canvas").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "canvas";
+      const url = URL.createObjectURL(new Blob([JSON.stringify(currentCanvas, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setQuickToolsOpen(false);
+      setEditorWarning("Project export failed. Exported current page only.");
     }
   }
 
@@ -1271,8 +1293,19 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
+      const currentSlug = getCanvasRouteSlug(canvasRef.current);
+      const importedCanvas = isCanvasImport(parsed)
+        ? parsed
+        : isProjectJsonImport(parsed)
+          ? parsed.pages.find((page) => page.slug === currentSlug)?.canvas ?? parsed.pages.find((page) => page.slug === parsed.currentSlug)?.canvas
+          : null;
 
-      if (!isCanvasImport(parsed)) {
+      if (!importedCanvas) {
+        setEditorWarning(isProjectJsonImport(parsed) ? "No matching page found in project JSON." : "Invalid project JSON.");
+        return;
+      }
+
+      if (!isCanvasImport(importedCanvas)) {
         setEditorWarning("Invalid project JSON.");
         return;
       }
@@ -1281,7 +1314,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         return;
       }
 
-      commitCanvas(parsed);
+      commitCanvas(importedCanvas);
       setSelectedId(undefined);
       setSelectedIds([]);
       setEditingTextId(undefined);
@@ -1289,7 +1322,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       setInspectorCollapsed(true);
       setQuickToolsOpen(false);
       setEditorWarning("");
-      showQuickToolsToast("Imported project JSON.");
+      showQuickToolsToast("Imported into this browser only. Export JSON to keep it.");
     } catch {
       setEditorWarning("Invalid project JSON.");
     }

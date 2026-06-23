@@ -2,17 +2,9 @@ import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import type { AssetFile } from "@/types/canvas";
-import { assetConfig, getAssetDirectory, isAssetKind, isLocalHost } from "../shared";
+import { assetConfig, getAssetDirectory, isAssetKind } from "../shared";
 
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV !== "development") {
-    return NextResponse.json({ error: "Asset listing is disabled in production." }, { status: 403 });
-  }
-
-  if (!isLocalHost(request.headers.get("host"))) {
-    return NextResponse.json({ error: "Asset listing is local-only." }, { status: 403 });
-  }
-
   const { searchParams } = new URL(request.url);
   const kind = searchParams.get("kind");
 

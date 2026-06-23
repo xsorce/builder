@@ -14,7 +14,7 @@ export const assetConfig = {
     publicPath: "/shapes",
     kind: "image",
     maxBytes: 2 * 1024 * 1024,
-    extensions: new Set([".png"]),
+    extensions: new Set([".png", ".svg", ".webp"]),
   },
   videos: {
     folder: "videos",
