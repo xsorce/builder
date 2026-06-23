@@ -1,27 +1,8 @@
 {
   "slug": "",
-  "title": "Home",
-  "height": 784,
+  "title": "project2",
+  "height": 810,
   "mobileHeight": 844,
   "backgroundColor": "#fafaf7",
-  "items": [
-    {
-      "id": "text-1782170938477-0",
-      "type": "text",
-      "x": 424.24,
-      "y": 187.44,
-      "width": 585,
-      "height": 325,
-      "rotate": 0,
-      "zIndex": 2,
-      "opacity": 1,
-      "locked": false,
-      "fontSize": 24,
-      "fontWeight": 600,
-      "fontFamily": "body",
-      "color": "#111111",
-      "autoFitText": false,
-      "text": "use ctrl + z to undo\n        ctrl + y to redo\n\n        ctrl + d to duplicate\n        backspace to delete\n\n\n\nhold shift while resizing text to increase text size\n\nhold ctrl while resizing images to crop\n\n\nandddd enjoy :)"
-    }
-  ]
+  "items": []
 }

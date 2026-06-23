@@ -1,5 +1,6 @@
 "use client";
 
+import JSZip from "jszip";
 import Moveable from "react-moveable";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, CSSProperties } from "react";
@@ -28,6 +29,9 @@ const DRAFT_STORAGE_PREFIX = "web-builder-draft:";
 const DRAFT_SAVE_DELAY = 600;
 const BETA_SPLASH_STORAGE_KEY = "xsorce-webrooms-splash-seen";
 const SPLASH_FADE_OUT_MS = 1200;
+const SPACES_STORAGE_KEY = "pagebuilder-spaces-v1";
+const SPACES_CLOSE_MS = 420;
+const EXPORT_SUCCESS_MESSAGE = "Perfect! Send this .zip to me using this tool.";
 
 type CanvasEditorProps = {
   initialCanvas: CanvasDocument;
@@ -587,6 +591,14 @@ type ProjectJsonImport = {
   pages: Array<{ slug: string; title: string; file: string; canvas: CanvasDocument }>;
 };
 
+type PageBuilderSpace = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  project: ProjectJsonImport;
+};
+
 type WebRoomPackageImport = {
   type: "webroom-package";
   project: ProjectJsonImport;
@@ -604,6 +616,100 @@ function isProjectJsonImport(value: unknown): value is ProjectJsonImport {
 
 function isWebRoomPackageImport(value: unknown): value is WebRoomPackageImport {
   return Boolean(value && typeof value === "object" && (value as WebRoomPackageImport).type === "webroom-package" && isProjectJsonImport((value as WebRoomPackageImport).project));
+}
+
+function createFallbackProject(canvas: CanvasDocument): ProjectJsonImport {
+  const slug = getCanvasRouteSlug(canvas);
+  return {
+    type: "web-builder-project",
+    currentSlug: slug,
+    pages: [{ slug, title: canvas.title, file: slug ? `${slug}.json` : "default.json", canvas }],
+  };
+}
+
+function createDefaultSpace(canvas: CanvasDocument): PageBuilderSpace {
+  const now = new Date().toISOString();
+  return {
+    id: `space-${Date.now()}`,
+    name: "project1",
+    createdAt: now,
+    updatedAt: now,
+    project: createFallbackProject(canvas),
+  };
+}
+
+function createBlankProject(name: string): ProjectJsonImport {
+  const canvas: CanvasDocument = {
+    slug: "",
+    title: name,
+    height: 810,
+    mobileHeight: MOBILE_ARTBOARD_HEIGHT,
+    backgroundColor: "#fafaf7",
+    items: [],
+  };
+
+  return {
+    type: "web-builder-project",
+    currentSlug: "",
+    pages: [{ slug: "", title: name, file: "default.json", canvas }],
+  };
+}
+
+function getNextProjectName(spaces: PageBuilderSpace[]) {
+  const names = new Set(spaces.map((space) => space.name.trim().toLowerCase()));
+  let nextNumber = 2;
+  while (names.has(`project${nextNumber}`)) {
+    nextNumber += 1;
+  }
+  return `project${nextNumber}`;
+}
+
+function getProjectCanvas(project: ProjectJsonImport, currentCanvas: CanvasDocument) {
+  const currentSlug = getCanvasRouteSlug(currentCanvas);
+  return project.pages.find((page) => page.slug === project.currentSlug)?.canvas ?? project.pages.find((page) => page.slug === currentSlug)?.canvas ?? project.pages[0]?.canvas;
+}
+
+function getLocalAssetFolder(src: string) {
+  if (src.startsWith("/images/")) {
+    return "images";
+  }
+  if (src.startsWith("/videos/")) {
+    return "videos";
+  }
+  if (src.startsWith("/audio/")) {
+    return "audio";
+  }
+  if (src.startsWith("/shapes/")) {
+    return "shapes";
+  }
+  return null;
+}
+
+function getAssetFileName(src: string) {
+  const pathname = src.split("?")[0]?.split("#")[0] ?? src;
+  return decodeURIComponent(pathname.split("/").pop() || "asset");
+}
+
+function getProjectFolderName(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+}
+
+function collectReferencedAssetSources(project: ProjectJsonImport) {
+  const sources = new Set<string>();
+
+  project.pages.forEach((page) => {
+    if (page.canvas.backgroundImage) {
+      sources.add(page.canvas.backgroundImage);
+    }
+
+    page.canvas.items.forEach((item) => {
+      if ((item.type === "image" || item.type === "video" || item.type === "audio") && item.src) {
+        sources.add(item.src);
+      }
+    });
+  });
+
+  return sources;
 }
 
 function getCanvasRouteSlug(canvas: Pick<CanvasDocument, "slug">) {
@@ -631,6 +737,11 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const [draftStatus, setDraftStatus] = useState("");
   const [draftPrompt, setDraftPrompt] = useState<{ savedAt: number; canvas: CanvasDocument } | null>(null);
   const [showBetaSplash, setShowBetaSplash] = useState(false);
+  const [spacesOpen, setSpacesOpen] = useState(false);
+  const [spacesClosing, setSpacesClosing] = useState(false);
+  const [spaces, setSpaces] = useState<PageBuilderSpace[]>([]);
+  const [selectedSpaceId, setSelectedSpaceId] = useState("");
+  const [activeSpaceId, setActiveSpaceId] = useState("");
   const [splashClosing, setSplashClosing] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(openBackgroundOnLoad);
@@ -658,6 +769,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const draftSaveTimerRef = useRef<number | null>(null);
   const quickToolsToastTimerRef = useRef<number | null>(null);
   const splashClosingTimerRef = useRef<number | null>(null);
+  const spacesClosingTimerRef = useRef<number | null>(null);
   const draftPromptPendingRef = useRef(false);
   const lastSavedJsonRef = useRef(JSON.stringify(initialCanvas));
   const selectedIdRef = useRef(selectedId);
@@ -681,6 +793,31 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   useEffect(() => {
     canvasRef.current = canvas;
   }, [canvas]);
+
+  useEffect(() => {
+    try {
+      const rawSpaces = window.localStorage.getItem(SPACES_STORAGE_KEY);
+      const parsed = rawSpaces ? (JSON.parse(rawSpaces) as PageBuilderSpace[]) : [];
+      const validSpaces = Array.isArray(parsed) && parsed.every((space) => space && typeof space.id === "string" && typeof space.name === "string" && isProjectJsonImport(space.project)) ? parsed : [];
+      const nextSpaces = validSpaces.length ? validSpaces : [createDefaultSpace(initialCanvas)];
+      setSpaces(nextSpaces);
+      setSelectedSpaceId(nextSpaces[0]?.id ?? "");
+      setActiveSpaceId(nextSpaces[0]?.id ?? "");
+    } catch {
+      const defaultSpaces = [createDefaultSpace(initialCanvas)];
+      setSpaces(defaultSpaces);
+      setSelectedSpaceId(defaultSpaces[0].id);
+      setActiveSpaceId(defaultSpaces[0].id);
+    }
+  }, [initialCanvas]);
+
+  useEffect(() => {
+    if (!spaces.length) {
+      return;
+    }
+
+    window.localStorage.setItem(SPACES_STORAGE_KEY, JSON.stringify(spaces));
+  }, [spaces]);
 
   useEffect(() => {
     try {
@@ -744,6 +881,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       }
       if (splashClosingTimerRef.current) {
         window.clearTimeout(splashClosingTimerRef.current);
+      }
+      if (spacesClosingTimerRef.current) {
+        window.clearTimeout(spacesClosingTimerRef.current);
       }
     };
   }, []);
@@ -1223,10 +1363,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     const currentCanvas = canvasRef.current;
 
     try {
-      const exportData = await getProjectExportData();
-      downloadJson(exportData, `pagebuilder-project-${new Date().toISOString().slice(0, 10)}.json`);
+      const exportData = await getProjectForExport();
+      await downloadProjectZip(exportData, getExportProjectName(exportData));
       setQuickToolsOpen(false);
-      showQuickToolsToast("Exported project JSON.");
+      showQuickToolsToast(EXPORT_SUCCESS_MESSAGE);
     } catch {
       const slug = (currentCanvas.slug || currentCanvas.title || "canvas").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "canvas";
       const url = URL.createObjectURL(new Blob([JSON.stringify(currentCanvas, null, 2)], { type: "application/json" }));
@@ -1236,8 +1376,38 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       link.click();
       URL.revokeObjectURL(url);
       setQuickToolsOpen(false);
-      setEditorWarning("Project export failed. Exported current page only.");
+      setEditorWarning("Project ZIP export failed. Exported current page only.");
     }
+  }
+
+  async function getProjectForExport() {
+    if (spacesOpen && selectedSpaceId && selectedSpaceId !== activeSpaceId) {
+      const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
+      if (selectedSpace) {
+        return { ...selectedSpace.project, exportedAt: new Date().toISOString() } as ProjectJsonImport & { exportedAt: string };
+      }
+    }
+
+    const project = await getProjectExportData();
+    if (activeSpaceId) {
+      const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+      const projectForSpace = activeSpace && (spaces[0]?.id === activeSpace.id || activeSpace.name.trim().toLowerCase() === "project1") ? project : createFallbackProject(canvasRef.current);
+      updateSpaceSnapshot(activeSpaceId, projectForSpace);
+      return projectForSpace;
+    }
+    return project;
+  }
+
+  function getExportProjectName(project: ProjectJsonImport) {
+    if (spacesOpen && selectedSpaceId) {
+      return spaces.find((space) => space.id === selectedSpaceId)?.name ?? "project";
+    }
+
+    if (activeSpaceId) {
+      return spaces.find((space) => space.id === activeSpaceId)?.name ?? "project";
+    }
+
+    return project.pages.find((page) => page.slug === project.currentSlug)?.title ?? project.pages[0]?.title ?? "project";
   }
 
   async function getProjectExportData() {
@@ -1265,6 +1435,79 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function downloadProjectZip(project: ProjectJsonImport & { exportedAt?: string }, projectName: string) {
+    const zip = new JSZip();
+    const skippedAssets: string[] = [];
+    const exportedProject = { ...project, exportedAt: new Date().toISOString() };
+    const registry = exportedProject.pages.map(({ slug, title, file }) => ({ slug, title, file }));
+    const projectFolder = `projects/${getProjectFolderName(projectName)}`;
+
+    zip.file("pagebuilder-project.json", JSON.stringify(exportedProject, null, 2));
+    zip.file(`${projectFolder}/project.json`, JSON.stringify(exportedProject, null, 2));
+    zip.file(`${projectFolder}/pages/index.json`, JSON.stringify(registry, null, 2));
+    exportedProject.pages.forEach((page) => {
+      zip.file(`${projectFolder}/pages/${page.file}`, JSON.stringify(page.canvas, null, 2));
+    });
+
+    zip.folder(`${projectFolder}/assets/images`);
+    zip.folder(`${projectFolder}/assets/videos`);
+    zip.folder(`${projectFolder}/assets/audio`);
+
+    await Promise.all(
+      Array.from(collectReferencedAssetSources(exportedProject)).map((src) => {
+        if (getLocalAssetFolder(src) === "shapes") {
+          return Promise.resolve();
+        }
+        if (getLocalAssetFolder(src)) {
+          return addLocalAssetToZip(zip, src, skippedAssets, projectFolder);
+        }
+        skippedAssets.push(`${src} (external asset not embedded)`);
+        return Promise.resolve();
+      }),
+    );
+
+    zip.file(
+      "README.txt",
+      [
+        "PageBuilder project package",
+        "",
+        "Project JSON is in pagebuilder-project.json and projects/<project>/project.json.",
+        "Page JSON copies are in projects/<project>/pages/.",
+        "Local public images, videos, and audio are copied into projects/<project>/assets/.",
+        "Shapes are shared defaults and are not included in this project ZIP.",
+        "",
+        skippedAssets.length ? "Skipped assets:" : "Skipped assets: none",
+        ...skippedAssets.map((asset) => `- ${asset}`),
+      ].join("\n"),
+    );
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${getProjectFolderName(projectName)}-${new Date().toISOString().slice(0, 10)}.zip`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function addLocalAssetToZip(zip: JSZip, src: string, skippedAssets: string[], projectFolder: string) {
+    const folder = getLocalAssetFolder(src);
+    if (!folder || folder === "shapes") {
+      return;
+    }
+
+    try {
+      const response = await fetch(src);
+      if (!response.ok) {
+        throw new Error("Could not fetch asset.");
+      }
+
+      zip.file(`${projectFolder}/assets/${folder}/${getAssetFileName(src)}`, await response.blob());
+    } catch {
+      skippedAssets.push(`${src} (local asset fetch failed)`);
+    }
   }
 
   async function exportWebRoomPackage() {
@@ -1322,6 +1565,100 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     }, SPLASH_FADE_OUT_MS);
   }
 
+  function updateSpaceSnapshot(spaceId: string, project: ProjectJsonImport) {
+    setSpaces((current) =>
+      current.map((space) =>
+        space.id === spaceId
+          ? {
+              ...space,
+              updatedAt: new Date().toISOString(),
+              project,
+            }
+          : space,
+      ),
+    );
+  }
+
+  function openSpaces() {
+    if (activeSpaceId) {
+      const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+      const shouldKeepFullBuilderProject = activeSpace && (spaces[0]?.id === activeSpace.id || activeSpace.name.trim().toLowerCase() === "project1");
+      getProjectExportData()
+        .then((project) => updateSpaceSnapshot(activeSpaceId, shouldKeepFullBuilderProject ? project : createFallbackProject(canvasRef.current)))
+        .catch(() => updateSpaceSnapshot(activeSpaceId, createFallbackProject(canvasRef.current)));
+    }
+    if (spacesClosingTimerRef.current) {
+      window.clearTimeout(spacesClosingTimerRef.current);
+      spacesClosingTimerRef.current = null;
+    }
+    setSpacesClosing(false);
+    setSpacesOpen(true);
+    setQuickToolsOpen(false);
+  }
+
+  function closeSpaces() {
+    if (spacesClosingTimerRef.current) {
+      window.clearTimeout(spacesClosingTimerRef.current);
+    }
+    setSpacesClosing(true);
+    spacesClosingTimerRef.current = window.setTimeout(() => {
+      setSpacesOpen(false);
+      setSpacesClosing(false);
+      spacesClosingTimerRef.current = null;
+    }, SPACES_CLOSE_MS);
+  }
+
+  function createSpace() {
+    const now = new Date().toISOString();
+    const name = getNextProjectName(spaces);
+    const nextSpace: PageBuilderSpace = {
+      id: `space-${Date.now()}`,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      project: createBlankProject(name),
+    };
+    setSpaces((current) => [...current, nextSpace]);
+    setSelectedSpaceId(nextSpace.id);
+  }
+
+  function renameSpace(spaceId: string, name: string) {
+    setSpaces((current) => current.map((space) => (space.id === spaceId ? { ...space, name, updatedAt: new Date().toISOString() } : space)));
+  }
+
+  function openSpace(space: PageBuilderSpace) {
+    const nextCanvas = getProjectCanvas(space.project, canvasRef.current);
+    if (nextCanvas) {
+      commitCanvas(nextCanvas);
+      setSelectedId(undefined);
+      setSelectedIds([]);
+      setEditingTextId(undefined);
+      setBackgroundInspectorOpen(false);
+      setInspectorCollapsed(true);
+    }
+    setActiveSpaceId(space.id);
+    setSelectedSpaceId(space.id);
+    closeSpaces();
+    showQuickToolsToast(`Opened ${space.name}.`);
+  }
+
+  function deleteSpace(space: PageBuilderSpace) {
+    if (spaces[0]?.id === space.id || space.name.trim().toLowerCase() === "project1" || !window.confirm("This will delete the entire project. Continue?")) {
+      return;
+    }
+
+    setSpaces((current) => {
+      const nextSpaces = current.filter((currentSpace) => currentSpace.id !== space.id);
+      if (selectedSpaceId === space.id) {
+        setSelectedSpaceId(nextSpaces[0]?.id ?? "");
+      }
+      if (activeSpaceId === space.id) {
+        setActiveSpaceId(nextSpaces[0]?.id ?? "");
+      }
+      return nextSpaces;
+    });
+  }
+
   async function importProjectJson(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1331,7 +1668,17 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     }
 
     try {
-      const parsed = JSON.parse(await file.text()) as unknown;
+      let parsed: unknown;
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        const zip = await JSZip.loadAsync(file);
+        const projectFile = zip.file("pagebuilder-project.json");
+        if (!projectFile) {
+          throw new Error("Missing pagebuilder-project.json.");
+        }
+        parsed = JSON.parse(await projectFile.async("string")) as unknown;
+      } else {
+        parsed = JSON.parse(await file.text()) as unknown;
+      }
       const currentSlug = getCanvasRouteSlug(canvasRef.current);
       const projectImport = isProjectJsonImport(parsed) ? parsed : isWebRoomPackageImport(parsed) ? parsed.project : null;
       const importedCanvas = isCanvasImport(parsed)
@@ -1350,7 +1697,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         return;
       }
 
-      if (!window.confirm("Import Project JSON and replace this page?")) {
+      if (!window.confirm("Import Project and replace this page?")) {
         return;
       }
 
@@ -1362,9 +1709,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       setInspectorCollapsed(true);
       setQuickToolsOpen(false);
       setEditorWarning("");
-      showQuickToolsToast("Imported into this browser only. Export JSON to keep it.");
+      showQuickToolsToast("Imported into this browser only. Export Project to keep it.");
     } catch {
-      setEditorWarning("Invalid project JSON.");
+      setEditorWarning("Invalid project JSON or ZIP.");
     }
   }
 
@@ -1607,16 +1954,13 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         </button>
         <div className="canvas-quick-tools-menu">
           <button type="button" onClick={exportProjectJson}>
-            Export Project JSON
-          </button>
-          <button type="button" onClick={exportWebRoomPackage}>
-            Export PageBuilder Package
+            Export Project
           </button>
           <button type="button" onClick={() => importInputRef.current?.click()}>
-            Import Project JSON
+            Import Project
           </button>
-          <button type="button" onClick={() => importInputRef.current?.click()}>
-            Import PageBuilder Package
+          <button type="button" onClick={openSpaces}>
+            Open Spaces
           </button>
           <button
             type="button"
@@ -1630,13 +1974,83 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               setQuickToolsOpen(false);
             }}
           >
-            Show Welcome Splash
+            Show Splash
           </button>
         </div>
-        <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json,.webroom.json,.pagebuilder.json" onChange={importProjectJson} />
+        <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json,.webroom.json,.pagebuilder.json,.zip" onChange={importProjectJson} />
       </div>
-      {quickToolsToast ? <div className="canvas-quick-tools-toast">{quickToolsToast}</div> : null}
+      {quickToolsToast ? (
+        <div className="canvas-quick-tools-toast">
+          {quickToolsToast === EXPORT_SUCCESS_MESSAGE ? (
+            <>
+              Perfect! Send this .zip to me using{" "}
+              <a href="https://send.monks.tools/" target="_blank" rel="noreferrer">
+                this tool
+              </a>.
+            </>
+          ) : (
+            quickToolsToast
+          )}
+        </div>
+      ) : null}
       {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
+      {spacesOpen ? (
+        <div className={`pagebuilder-spaces${spacesClosing ? " is-closing" : ""}`}>
+          <div className="pagebuilder-spaces-panel">
+            <div className="pagebuilder-spaces-topline">
+              <span>Spaces</span>
+              <button type="button" onClick={closeSpaces}>
+                Back to Editor
+              </button>
+            </div>
+            <div className="pagebuilder-spaces-grid">
+              {spaces.map((space, index) => {
+                const isStarterProject = index === 0 || space.name.trim().toLowerCase() === "project1";
+                return (
+                  <div key={space.id} className={`pagebuilder-space-card${selectedSpaceId === space.id ? " is-selected" : ""}`} onClick={() => setSelectedSpaceId(space.id)}>
+                    <input
+                      value={space.name}
+                      onChange={(event) => renameSpace(space.id, event.target.value)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label="Project name"
+                    />
+                    <span>Last edited {new Date(space.updatedAt).toLocaleDateString()}</span>
+                    <div className="pagebuilder-space-actions">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openSpace(space);
+                        }}
+                      >
+                        Open
+                      </button>
+                      {isStarterProject ? (
+                        <button type="button" disabled title="project1 is the starter project">
+                          Delete
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteSpace(space);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <button type="button" className="pagebuilder-space-card pagebuilder-space-new" onClick={createSpace}>
+                New Project
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {draftPrompt ? (
         <div className="canvas-draft-prompt">
           <strong>Local draft found</strong>

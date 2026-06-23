@@ -9,6 +9,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "moveable": "^0.53.0",
     "next": "latest",
     "react": "latest",
