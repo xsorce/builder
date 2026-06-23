@@ -81,7 +81,7 @@
       "fontWeight": 600,
       "fontFamily": "body",
       "color": "#111111",
-      "src": "/project1/images/typing-1.gif",
+      "src": "/project1/images/typing.gif",
       "hoverEffect": "lift"
     },
     {
@@ -99,7 +99,7 @@
       "fontWeight": 600,
       "fontFamily": "body",
       "color": "#111111",
-      "src": "/project1/videos/hi-1.mp4",
+      "src": "/project1/videos/hi.mp4",
       "autoPlay": true,
       "muted": true,
       "hoverEffect": "glow",
@@ -120,7 +120,7 @@
       "fontWeight": 600,
       "fontFamily": "mono",
       "color": "#386b23",
-      "src": "/project1/audio/enough-1.mp3",
+      "src": "/project1/audio/enough.mp3",
       "title": "enough - pulp333",
       "caption": "add a caption to your songs!",
       "hoverEffect": "color",
@@ -268,7 +268,7 @@
       "fontWeight": 600,
       "fontFamily": "body",
       "color": "#111111",
-      "src": "/project1/images/xsorce-1.png",
+      "src": "/project1/images/xsorce.png",
       "recolorColor": "#9d4088",
       "recolorIntensity": 100,
       "idleEffect": "sway",
@@ -277,7 +277,7 @@
       "hoverEffect": "color"
     }
   ],
-  "backgroundImage": "/project1/images/background1-1.jpg",
+  "backgroundImage": "/project1/images/background1.jpg",
   "backgroundImageFit": "tile",
-  "backgroundImageOpacity": 0.4
+  "backgroundImageOpacity": 0.6
 }
