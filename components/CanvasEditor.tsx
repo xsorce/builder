@@ -587,6 +587,11 @@ type ProjectJsonImport = {
   pages: Array<{ slug: string; title: string; file: string; canvas: CanvasDocument }>;
 };
 
+type WebRoomPackageImport = {
+  type: "webroom-package";
+  project: ProjectJsonImport;
+};
+
 function isProjectJsonImport(value: unknown): value is ProjectJsonImport {
   return Boolean(
     value &&
@@ -595,6 +600,10 @@ function isProjectJsonImport(value: unknown): value is ProjectJsonImport {
       Array.isArray((value as ProjectJsonImport).pages) &&
       (value as ProjectJsonImport).pages.every((page) => page && typeof page === "object" && isCanvasImport((page as ProjectJsonImport["pages"][number]).canvas)),
   );
+}
+
+function isWebRoomPackageImport(value: unknown): value is WebRoomPackageImport {
+  return Boolean(value && typeof value === "object" && (value as WebRoomPackageImport).type === "webroom-package" && isProjectJsonImport((value as WebRoomPackageImport).project));
 }
 
 function getCanvasRouteSlug(canvas: Pick<CanvasDocument, "slug">) {
@@ -1212,28 +1221,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
   async function exportProjectJson() {
     const currentCanvas = canvasRef.current;
-    const currentSlug = getCanvasRouteSlug(currentCanvas);
 
     try {
-      const response = await fetch("/api/dev-pages/export");
-
-      if (!response.ok) {
-        throw new Error("Project export failed.");
-      }
-
-      const project = (await response.json()) as ProjectJsonImport & { version: number; exportedAt: string };
-      const exportData = {
-        ...project,
-        exportedAt: new Date().toISOString(),
-        currentSlug,
-        pages: project.pages.map((page) => (page.slug === currentSlug ? { ...page, title: currentCanvas.title, canvas: currentCanvas } : page)),
-      };
-      const url = URL.createObjectURL(new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `web-builder-project-${new Date().toISOString().slice(0, 10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      const exportData = await getProjectExportData();
+      downloadJson(exportData, `pagebuilder-project-${new Date().toISOString().slice(0, 10)}.json`);
       setQuickToolsOpen(false);
       showQuickToolsToast("Exported project JSON.");
     } catch {
@@ -1246,6 +1237,54 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       URL.revokeObjectURL(url);
       setQuickToolsOpen(false);
       setEditorWarning("Project export failed. Exported current page only.");
+    }
+  }
+
+  async function getProjectExportData() {
+    const currentCanvas = canvasRef.current;
+    const currentSlug = getCanvasRouteSlug(currentCanvas);
+    const response = await fetch("/api/dev-pages/export");
+
+    if (!response.ok) {
+      throw new Error("Project export failed.");
+    }
+
+    const project = (await response.json()) as ProjectJsonImport & { version: number; exportedAt: string };
+    return {
+      ...project,
+      exportedAt: new Date().toISOString(),
+      currentSlug,
+      pages: project.pages.map((page) => (page.slug === currentSlug ? { ...page, title: currentCanvas.title, canvas: currentCanvas } : page)),
+    };
+  }
+
+  function downloadJson(data: unknown, filename: string) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportWebRoomPackage() {
+    try {
+      const project = await getProjectExportData();
+      downloadJson(
+        {
+          type: "webroom-package",
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          readme: "Send this package to Zane to publish it online. ZIP asset-folder packaging is not included yet; keep referenced public asset files with the project.",
+          project,
+          assetFolders: ["assets/images/", "assets/videos/", "assets/audio/", "assets/shapes/"],
+        },
+        `pagebuilder-package-${new Date().toISOString().slice(0, 10)}.pagebuilder.json`,
+      );
+      setQuickToolsOpen(false);
+      showQuickToolsToast("Send this package to Zane to publish it online.");
+    } catch {
+      setEditorWarning("PageBuilder package export failed.");
     }
   }
 
@@ -1294,14 +1333,15 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
       const currentSlug = getCanvasRouteSlug(canvasRef.current);
+      const projectImport = isProjectJsonImport(parsed) ? parsed : isWebRoomPackageImport(parsed) ? parsed.project : null;
       const importedCanvas = isCanvasImport(parsed)
         ? parsed
-        : isProjectJsonImport(parsed)
-          ? parsed.pages.find((page) => page.slug === currentSlug)?.canvas ?? parsed.pages.find((page) => page.slug === parsed.currentSlug)?.canvas
+        : projectImport
+          ? projectImport.pages.find((page) => page.slug === currentSlug)?.canvas ?? projectImport.pages.find((page) => page.slug === projectImport.currentSlug)?.canvas
           : null;
 
       if (!importedCanvas) {
-        setEditorWarning(isProjectJsonImport(parsed) ? "No matching page found in project JSON." : "Invalid project JSON.");
+        setEditorWarning(projectImport ? "No matching page found in project JSON." : "Invalid project JSON.");
         return;
       }
 
@@ -1569,8 +1609,14 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           <button type="button" onClick={exportProjectJson}>
             Export Project JSON
           </button>
+          <button type="button" onClick={exportWebRoomPackage}>
+            Export PageBuilder Package
+          </button>
           <button type="button" onClick={() => importInputRef.current?.click()}>
             Import Project JSON
+          </button>
+          <button type="button" onClick={() => importInputRef.current?.click()}>
+            Import PageBuilder Package
           </button>
           <button
             type="button"
@@ -1587,7 +1633,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             Show Welcome Splash
           </button>
         </div>
-        <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importProjectJson} />
+        <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json,.webroom.json,.pagebuilder.json" onChange={importProjectJson} />
       </div>
       {quickToolsToast ? <div className="canvas-quick-tools-toast">{quickToolsToast}</div> : null}
       {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
@@ -2066,7 +2112,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               <p>Keep a list of any bugs, inconviences, or design opinions you have while using the builder. Your feedback is much needed!</p>
             </div>
             <button type="button" className="webrooms-splash-button" onClick={dismissBetaSplash}>
-              understood! enter the web builder
+              understood! enter the builder
             </button>
           </div>
         </div>

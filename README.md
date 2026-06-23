@@ -1,16 +1,18 @@
-# Standalone Web Builder
+# PageBuilder Local Editor
 
 ## 1. What It Is
 
-This is a standalone canvas web page builder. You can make pages with text, images, videos, audio, animations, crop, resize, drag, rotate, mobile view, page passwords, and preview pages.
+This repo is the local PageBuilder editor app. You can make pages with text, images, videos, audio, animations, crop, resize, drag, rotate, mobile view, page passwords, and preview pages.
+
+Vercel should not be connected to this builder repo long-term. Publishing happens by exporting or copying page JSON and assets to `PageBuilder-Site`.
 
 ## 2. How To Download
 
-Download or clone this `web-builder` folder onto your computer.
+Download or clone this PageBuilder builder folder onto your computer.
 
 ## 3. How To Install
 
-Open a terminal in the `web-builder` folder and run:
+Open a terminal in the PageBuilder builder folder and run:
 
 ```bash
 npm install
@@ -71,7 +73,7 @@ content/canvas/pages
 
 ## 9. How To Upload To GitHub
 
-From inside the `web-builder` folder, run:
+From inside the PageBuilder builder folder, run:
 
 ```bash
 git init

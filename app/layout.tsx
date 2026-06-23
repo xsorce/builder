@@ -21,8 +21,8 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Standalone Web Builder",
-  description: "A standalone canvas web page builder.",
+  title: "PageBuilder Local Editor",
+  description: "The local PageBuilder editor app.",
   icons: {
     icon: "/favicon.png",
     shortcut: "/favicon.png",
