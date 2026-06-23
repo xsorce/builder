@@ -120,7 +120,7 @@ export function AsciiAudioPlayer({ src, title, caption, background = true, style
   }, []);
 
   const safeProgress = duration > 0 ? Math.min(Math.max(current / duration, 0), 1) : 0;
-  const filled = Math.min(barLength, Math.max(0, Math.ceil(safeProgress * barLength)));
+  const filled = duration > 0 ? Math.min(barLength, Math.max(0, Math.floor(safeProgress * barLength))) : 0;
   const empty = barLength - filled;
   const bar = `${TIMELINE_FILLED.repeat(filled)}${TIMELINE_EMPTY.repeat(empty)}`;
   const visibleTitle = title?.trim();

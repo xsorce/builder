@@ -748,9 +748,8 @@ function getNextProjectName(spaces: PageBuilderSpace[]) {
   return `project${nextNumber}`;
 }
 
-function getProjectCanvas(project: ProjectJsonImport, currentCanvas: CanvasDocument) {
-  const currentSlug = getCanvasRouteSlug(currentCanvas);
-  return project.pages.find((page) => page.slug === project.currentSlug)?.canvas ?? project.pages.find((page) => page.slug === currentSlug)?.canvas ?? project.pages[0]?.canvas;
+function getProjectCanvas(project: ProjectJsonImport) {
+  return project.pages.find((page) => page.slug === project.currentSlug)?.canvas ?? project.pages.find((page) => page.slug === "")?.canvas ?? project.pages[0]?.canvas;
 }
 
 function getLocalAssetFolder(src: string) {
@@ -1551,7 +1550,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     const baseUrl = activeSpace ? getProjectPagePath(activeSpace.assetFolder, getCanvasRouteSlug(canvasRef.current)) : canvasRef.current.slug === "home" || canvasRef.current.slug === "index" ? "/" : `/${canvasRef.current.slug}`;
     if (activeSpace) {
       const project = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
-      window.sessionStorage.setItem("pagebuilder-preview-canvas", JSON.stringify(getProjectCanvas(project, canvasRef.current) ?? canvasRef.current));
+      window.sessionStorage.setItem("pagebuilder-preview-canvas", JSON.stringify(getProjectCanvas(project) ?? canvasRef.current));
       const params = new URLSearchParams({ previewCanvas: "1" });
       if (mobileView) {
         params.set("view", "mobile");
@@ -1820,7 +1819,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       const migrated = (await response.json()) as { assetBasePath?: string; project?: ProjectJsonImport };
       if (migrated.project && isProjectJsonImport(migrated.project)) {
         if (activeSpaceId === space.id) {
-          const nextCanvas = getProjectCanvas(migrated.project, canvasRef.current);
+          const nextCanvas = getProjectCanvas(migrated.project);
           if (nextCanvas) {
             setCanvas(nextCanvas);
             canvasRef.current = nextCanvas;
@@ -1966,7 +1965,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       );
       setSpaceNameDrafts((current) => ({ ...current, [space.id]: nextName }));
       if (activeSpaceId === space.id) {
-        const nextCanvas = getProjectCanvas(renamed.project, canvasRef.current);
+        const nextCanvas = getProjectCanvas(renamed.project);
         if (nextCanvas) {
           setCanvas(nextCanvas);
           canvasRef.current = nextCanvas;
@@ -1979,7 +1978,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }
 
   function openSpace(space: PageBuilderSpace) {
-    const nextCanvas = getProjectCanvas(space.project, canvasRef.current);
+    const nextCanvas = getProjectCanvas(space.project);
     saveActiveSpaceSnapshot(canvasRef.current);
     if (nextCanvas) {
       setCanvas(nextCanvas);
