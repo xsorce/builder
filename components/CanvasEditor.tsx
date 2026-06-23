@@ -31,7 +31,7 @@ const BETA_SPLASH_STORAGE_KEY = "xsorce-webrooms-splash-seen";
 const SPLASH_FADE_OUT_MS = 1200;
 const SPACES_STORAGE_KEY = "pagebuilder-spaces-v1";
 const SPACES_CLOSE_MS = 420;
-const EXPORT_SUCCESS_MESSAGE = "Perfect! Send this .zip to me using this tool.";
+const EXPORT_SUCCESS_FADE_MS = 220;
 
 type CanvasEditorProps = {
   initialCanvas: CanvasDocument;
@@ -509,7 +509,7 @@ function defaultItem(type: CanvasItemType, count: number): CanvasItem {
   } satisfies CanvasItem;
 
   if (type === "image") {
-    return { ...base, src: "/images/default-image.png" };
+    return { ...base, src: "" };
   }
 
   if (type === "video") {
@@ -594,6 +594,8 @@ type ProjectJsonImport = {
 type PageBuilderSpace = {
   id: string;
   name: string;
+  assetFolder: string;
+  assetBasePath: string;
   createdAt: string;
   updatedAt: string;
   project: ProjectJsonImport;
@@ -632,16 +634,54 @@ function createDefaultSpace(canvas: CanvasDocument): PageBuilderSpace {
   return {
     id: `space-${Date.now()}`,
     name: "project1",
+    assetFolder: "project1",
+    assetBasePath: "/project1",
     createdAt: now,
     updatedAt: now,
     project: createFallbackProject(canvas),
   };
 }
 
-function createBlankProject(name: string): ProjectJsonImport {
+function getAssetFolderFromName(name: string) {
+  return (
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "project"
+  );
+}
+
+function getSpaceAssetFolder(space: Pick<PageBuilderSpace, "name"> & Partial<Pick<PageBuilderSpace, "assetFolder">>, index = 0) {
+  return space.assetFolder || getAssetFolderFromName(space.name) || `project${index + 1}`;
+}
+
+function withSpaceAssetMetadata(space: PageBuilderSpace, index: number): PageBuilderSpace {
+  const assetFolder = getSpaceAssetFolder(space, index);
+  return {
+    ...space,
+    assetFolder,
+    assetBasePath: `/${assetFolder}`,
+  };
+}
+
+function getSpaceSafeCanvasSlug(space: Pick<PageBuilderSpace, "id">) {
+  return `projects/${space.id}/pages/default.json`;
+}
+
+function isStarterSpace(space: PageBuilderSpace, spaces: PageBuilderSpace[]) {
+  return spaces[0]?.id === space.id || space.name.trim().toLowerCase() === "project1";
+}
+
+function isLocalOnlySpace(space: PageBuilderSpace, spaces: PageBuilderSpace[]) {
+  return !isStarterSpace(space, spaces);
+}
+
+function createBlankProject(name: string, spaceId: string): ProjectJsonImport {
   const canvas: CanvasDocument = {
     slug: "",
-    title: name,
+    title: "Home",
     height: 810,
     mobileHeight: MOBILE_ARTBOARD_HEIGHT,
     backgroundColor: "#fafaf7",
@@ -651,8 +691,52 @@ function createBlankProject(name: string): ProjectJsonImport {
   return {
     type: "web-builder-project",
     currentSlug: "",
-    pages: [{ slug: "", title: name, file: "default.json", canvas }],
+    pages: [{ slug: "", title: "Home", file: getSpaceSafeCanvasSlug({ id: spaceId }), canvas }],
   };
+}
+
+function updateProjectCanvas(project: ProjectJsonImport, canvas: CanvasDocument, space: PageBuilderSpace) {
+  const currentSlug = project.currentSlug ?? "";
+  const pageIndex = project.pages.findIndex((page) => page.slug === currentSlug);
+  const nextPage = {
+    slug: currentSlug,
+    title: canvas.title || "Home",
+    file: getSpaceSafeCanvasSlug(space),
+    canvas,
+  };
+
+  if (pageIndex < 0) {
+    return { ...project, currentSlug, pages: [nextPage] };
+  }
+
+  return {
+    ...project,
+    currentSlug,
+    pages: project.pages.map((page, index) => (index === pageIndex ? nextPage : page)),
+  };
+}
+
+function isObviousStarterClone(space: PageBuilderSpace, initialCanvas: CanvasDocument) {
+  const hasStarterPage = space.project.pages.some((page) => {
+    const values = [page.slug, page.title, page.file, page.canvas.slug, page.canvas.title].map((value) => value.toLowerCase());
+    return values.some((value) => value.includes("starter"));
+  });
+  const projectJson = JSON.stringify(space.project);
+  const hasCopiedProjectMedia = /"\/(projects\/)?project1\/(images|videos|audio)\//.test(projectJson);
+  const starterMediaSources = collectReferencedAssetSources(createFallbackProject(initialCanvas));
+  const hasCopiedStarterMedia = Array.from(starterMediaSources).some((src) => src && projectJson.includes(src));
+
+  if (hasStarterPage || hasCopiedProjectMedia || hasCopiedStarterMedia) {
+    return true;
+  }
+
+  const initialItemsJson = JSON.stringify(initialCanvas.items);
+  return space.project.pages.some((page) => JSON.stringify(page.canvas.items ?? []) === initialItemsJson);
+}
+
+function repairSpaces(spaces: PageBuilderSpace[], initialCanvas: CanvasDocument) {
+  const spacesWithMetadata = spaces.map(withSpaceAssetMetadata);
+  return spacesWithMetadata.map((space) => (isLocalOnlySpace(space, spacesWithMetadata) && isObviousStarterClone(space, initialCanvas) ? { ...space, project: createBlankProject(space.name, space.id) } : space));
 }
 
 function getNextProjectName(spaces: PageBuilderSpace[]) {
@@ -670,17 +754,12 @@ function getProjectCanvas(project: ProjectJsonImport, currentCanvas: CanvasDocum
 }
 
 function getLocalAssetFolder(src: string) {
-  if (src.startsWith("/images/")) {
-    return "images";
-  }
-  if (src.startsWith("/videos/")) {
-    return "videos";
-  }
-  if (src.startsWith("/audio/")) {
-    return "audio";
-  }
   if (src.startsWith("/shapes/")) {
     return "shapes";
+  }
+  const projectAssetMatch = src.match(/^\/(?:projects\/)?[^/]+\/(images|videos|audio)\//);
+  if (projectAssetMatch) {
+    return projectAssetMatch[1] as "images" | "videos" | "audio";
   }
   return null;
 }
@@ -734,12 +813,15 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const [editorWarning, setEditorWarning] = useState("");
   const [quickToolsOpen, setQuickToolsOpen] = useState(false);
   const [quickToolsToast, setQuickToolsToast] = useState("");
+  const [exportSuccessOpen, setExportSuccessOpen] = useState(false);
+  const [exportSuccessClosing, setExportSuccessClosing] = useState(false);
   const [draftStatus, setDraftStatus] = useState("");
   const [draftPrompt, setDraftPrompt] = useState<{ savedAt: number; canvas: CanvasDocument } | null>(null);
   const [showBetaSplash, setShowBetaSplash] = useState(false);
   const [spacesOpen, setSpacesOpen] = useState(false);
   const [spacesClosing, setSpacesClosing] = useState(false);
   const [spaces, setSpaces] = useState<PageBuilderSpace[]>([]);
+  const [spaceNameDrafts, setSpaceNameDrafts] = useState<Record<string, string>>({});
   const [selectedSpaceId, setSelectedSpaceId] = useState("");
   const [activeSpaceId, setActiveSpaceId] = useState("");
   const [splashClosing, setSplashClosing] = useState(false);
@@ -768,9 +850,11 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const autosaveTimerRef = useRef<number | null>(null);
   const draftSaveTimerRef = useRef<number | null>(null);
   const quickToolsToastTimerRef = useRef<number | null>(null);
+  const exportSuccessTimerRef = useRef<number | null>(null);
   const splashClosingTimerRef = useRef<number | null>(null);
   const spacesClosingTimerRef = useRef<number | null>(null);
   const draftPromptPendingRef = useRef(false);
+  const migratedSpaceAssetsRef = useRef<Set<string>>(new Set());
   const lastSavedJsonRef = useRef(JSON.stringify(initialCanvas));
   const selectedIdRef = useRef(selectedId);
   const selectedIdsRef = useRef(selectedIds);
@@ -799,13 +883,15 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       const rawSpaces = window.localStorage.getItem(SPACES_STORAGE_KEY);
       const parsed = rawSpaces ? (JSON.parse(rawSpaces) as PageBuilderSpace[]) : [];
       const validSpaces = Array.isArray(parsed) && parsed.every((space) => space && typeof space.id === "string" && typeof space.name === "string" && isProjectJsonImport(space.project)) ? parsed : [];
-      const nextSpaces = validSpaces.length ? validSpaces : [createDefaultSpace(initialCanvas)];
+      const nextSpaces = validSpaces.length ? repairSpaces(validSpaces, initialCanvas) : [createDefaultSpace(initialCanvas)];
       setSpaces(nextSpaces);
+      setSpaceNameDrafts(Object.fromEntries(nextSpaces.map((space) => [space.id, space.name])));
       setSelectedSpaceId(nextSpaces[0]?.id ?? "");
       setActiveSpaceId(nextSpaces[0]?.id ?? "");
     } catch {
       const defaultSpaces = [createDefaultSpace(initialCanvas)];
       setSpaces(defaultSpaces);
+      setSpaceNameDrafts(Object.fromEntries(defaultSpaces.map((space) => [space.id, space.name])));
       setSelectedSpaceId(defaultSpaces[0].id);
       setActiveSpaceId(defaultSpaces[0].id);
     }
@@ -817,6 +903,16 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     }
 
     window.localStorage.setItem(SPACES_STORAGE_KEY, JSON.stringify(spaces));
+  }, [spaces]);
+
+  useEffect(() => {
+    spaces.forEach((space) => {
+      if (migratedSpaceAssetsRef.current.has(space.id)) {
+        return;
+      }
+      migratedSpaceAssetsRef.current.add(space.id);
+      void migrateProjectAssets(space);
+    });
   }, [spaces]);
 
   useEffect(() => {
@@ -879,6 +975,9 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       if (quickToolsToastTimerRef.current) {
         window.clearTimeout(quickToolsToastTimerRef.current);
       }
+      if (exportSuccessTimerRef.current) {
+        window.clearTimeout(exportSuccessTimerRef.current);
+      }
       if (splashClosingTimerRef.current) {
         window.clearTimeout(splashClosingTimerRef.current);
       }
@@ -927,6 +1026,15 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     setSaveState("idle");
   }, []);
 
+  function saveActiveSpaceSnapshot(nextCanvas: CanvasDocument) {
+    const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+    if (!activeSpace || !isLocalOnlySpace(activeSpace, spaces)) {
+      return;
+    }
+
+    updateSpaceSnapshot(activeSpace.id, updateProjectCanvas(activeSpace.project, nextCanvas, activeSpace));
+  }
+
   const pushPast = useCallback((previous: CanvasDocument) => {
     setPast((current) => [...current.slice(-(HISTORY_LIMIT - 1)), previous]);
     setFuture([]);
@@ -936,9 +1044,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     (nextCanvas: CanvasDocument) => {
       pushPast(canvasRef.current);
       setCanvas(nextCanvas);
+      saveActiveSpaceSnapshot(nextCanvas);
       markDirty();
     },
-    [markDirty, pushPast],
+    [activeSpaceId, markDirty, pushPast, spaces],
   );
 
   useEffect(() => {
@@ -957,9 +1066,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     (nextCanvas: CanvasDocument) => {
       canvasRef.current = nextCanvas;
       setCanvas(nextCanvas);
+      saveActiveSpaceSnapshot(nextCanvas);
       markDirty();
     },
-    [markDirty],
+    [activeSpaceId, markDirty, spaces],
   );
 
   const updateItem = useCallback(
@@ -1003,11 +1113,13 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       }
 
       setFuture((currentFuture) => [canvasRef.current, ...currentFuture].slice(0, HISTORY_LIMIT));
+      canvasRef.current = previous;
       setCanvas(previous);
+      saveActiveSpaceSnapshot(previous);
       setSaveState("idle");
       return currentPast.slice(0, -1);
     });
-  }, []);
+  }, [activeSpaceId, spaces]);
 
   const redo = useCallback(() => {
     setFuture((currentFuture) => {
@@ -1018,11 +1130,13 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       }
 
       setPast((currentPast) => [...currentPast.slice(-(HISTORY_LIMIT - 1)), canvasRef.current]);
+      canvasRef.current = next;
       setCanvas(next);
+      saveActiveSpaceSnapshot(next);
       setSaveState("idle");
       return currentFuture.slice(1);
     });
-  }, []);
+  }, [activeSpaceId, spaces]);
 
   const duplicateSelected = useCallback(() => {
     const ids = selectedIdsRef.current.length ? selectedIdsRef.current : selectedIdRef.current ? [selectedIdRef.current] : [];
@@ -1064,6 +1178,14 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
     try {
       const nextJson = JSON.stringify(nextCanvas);
+      const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+      if (activeSpace && isLocalOnlySpace(activeSpace, spaces)) {
+        updateSpaceSnapshot(activeSpace.id, updateProjectCanvas(activeSpace.project, nextCanvas, activeSpace));
+        lastSavedJsonRef.current = nextJson;
+        setSaveState("saved");
+        return;
+      }
+
       const response = await fetch("/api/dev-save-canvas", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1079,7 +1201,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     } catch {
       setSaveState("error");
     }
-  }, []);
+  }, [activeSpaceId, spaces]);
 
   useEffect(() => {
     if (!hasMountedRef.current) {
@@ -1366,7 +1488,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       const exportData = await getProjectForExport();
       await downloadProjectZip(exportData, getExportProjectName(exportData));
       setQuickToolsOpen(false);
-      showQuickToolsToast(EXPORT_SUCCESS_MESSAGE);
+      showExportSuccessOverlay();
     } catch {
       const slug = (currentCanvas.slug || currentCanvas.title || "canvas").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "canvas";
       const url = URL.createObjectURL(new Blob([JSON.stringify(currentCanvas, null, 2)], { type: "application/json" }));
@@ -1381,19 +1503,29 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }
 
   async function getProjectForExport() {
-    if (spacesOpen && selectedSpaceId && selectedSpaceId !== activeSpaceId) {
+    if (spacesOpen && selectedSpaceId) {
       const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
       if (selectedSpace) {
-        return { ...selectedSpace.project, exportedAt: new Date().toISOString() } as ProjectJsonImport & { exportedAt: string };
+        const project =
+          selectedSpace.id === activeSpaceId && isLocalOnlySpace(selectedSpace, spaces)
+            ? updateProjectCanvas(selectedSpace.project, canvasRef.current, selectedSpace)
+            : selectedSpace.project;
+        return { ...project, exportedAt: new Date().toISOString() } as ProjectJsonImport & { exportedAt: string };
+      }
+    }
+
+    if (activeSpaceId) {
+      const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+      if (activeSpace && isLocalOnlySpace(activeSpace, spaces)) {
+        const projectForSpace = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+        updateSpaceSnapshot(activeSpaceId, projectForSpace);
+        return projectForSpace;
       }
     }
 
     const project = await getProjectExportData();
     if (activeSpaceId) {
-      const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-      const projectForSpace = activeSpace && (spaces[0]?.id === activeSpace.id || activeSpace.name.trim().toLowerCase() === "project1") ? project : createFallbackProject(canvasRef.current);
-      updateSpaceSnapshot(activeSpaceId, projectForSpace);
-      return projectForSpace;
+      updateSpaceSnapshot(activeSpaceId, project);
     }
     return project;
   }
@@ -1552,6 +1684,27 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     quickToolsToastTimerRef.current = window.setTimeout(() => setQuickToolsToast(""), 2600);
   }
 
+  function showExportSuccessOverlay() {
+    if (exportSuccessTimerRef.current) {
+      window.clearTimeout(exportSuccessTimerRef.current);
+      exportSuccessTimerRef.current = null;
+    }
+    setExportSuccessClosing(false);
+    setExportSuccessOpen(true);
+  }
+
+  function dismissExportSuccessOverlay() {
+    if (exportSuccessTimerRef.current) {
+      window.clearTimeout(exportSuccessTimerRef.current);
+    }
+    setExportSuccessClosing(true);
+    exportSuccessTimerRef.current = window.setTimeout(() => {
+      setExportSuccessOpen(false);
+      setExportSuccessClosing(false);
+      exportSuccessTimerRef.current = null;
+    }, EXPORT_SUCCESS_FADE_MS);
+  }
+
   function dismissBetaSplash() {
     window.localStorage.setItem(BETA_SPLASH_STORAGE_KEY, "1");
     if (splashClosingTimerRef.current) {
@@ -1563,6 +1716,52 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       setSplashClosing(false);
       splashClosingTimerRef.current = null;
     }, SPLASH_FADE_OUT_MS);
+  }
+
+  async function migrateProjectAssets(space: PageBuilderSpace) {
+    try {
+      const response = await fetch("/api/dev-assets/migrate-project", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetFolder: space.assetFolder, project: space.project }),
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const migrated = (await response.json()) as { assetBasePath?: string; project?: ProjectJsonImport };
+      if (migrated.project && isProjectJsonImport(migrated.project)) {
+        if (activeSpaceId === space.id) {
+          const nextCanvas = getProjectCanvas(migrated.project, canvasRef.current);
+          if (nextCanvas) {
+            setCanvas(nextCanvas);
+            canvasRef.current = nextCanvas;
+          }
+        }
+        setSpaces((current) =>
+          current.map((currentSpace) =>
+            currentSpace.id === space.id
+              ? {
+                  ...currentSpace,
+                  assetBasePath: migrated.assetBasePath ?? currentSpace.assetBasePath,
+                  project: migrated.project as ProjectJsonImport,
+                }
+              : currentSpace,
+          ),
+        );
+      }
+    } catch {
+      // Keep the project unchanged if local asset migration is unavailable.
+    }
+  }
+
+  function initializeBlankProjectFolder(space: PageBuilderSpace) {
+    void fetch("/api/dev-assets/migrate-project", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetFolder: space.assetFolder, cleanGeneratedFiles: true, project: space.project }),
+    }).catch(() => setEditorWarning("Project folder setup failed."));
   }
 
   function updateSpaceSnapshot(spaceId: string, project: ProjectJsonImport) {
@@ -1582,10 +1781,13 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   function openSpaces() {
     if (activeSpaceId) {
       const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-      const shouldKeepFullBuilderProject = activeSpace && (spaces[0]?.id === activeSpace.id || activeSpace.name.trim().toLowerCase() === "project1");
-      getProjectExportData()
-        .then((project) => updateSpaceSnapshot(activeSpaceId, shouldKeepFullBuilderProject ? project : createFallbackProject(canvasRef.current)))
-        .catch(() => updateSpaceSnapshot(activeSpaceId, createFallbackProject(canvasRef.current)));
+      if (activeSpace && isLocalOnlySpace(activeSpace, spaces)) {
+        updateSpaceSnapshot(activeSpaceId, updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace));
+      } else {
+        getProjectExportData()
+          .then((project) => updateSpaceSnapshot(activeSpaceId, project))
+          .catch(() => updateSpaceSnapshot(activeSpaceId, createFallbackProject(canvasRef.current)));
+      }
     }
     if (spacesClosingTimerRef.current) {
       window.clearTimeout(spacesClosingTimerRef.current);
@@ -1611,25 +1813,94 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   function createSpace() {
     const now = new Date().toISOString();
     const name = getNextProjectName(spaces);
+    const id = `space-${Date.now()}`;
+    const assetFolder = getAssetFolderFromName(name);
     const nextSpace: PageBuilderSpace = {
-      id: `space-${Date.now()}`,
+      id,
       name,
+      assetFolder,
+      assetBasePath: `/${assetFolder}`,
       createdAt: now,
       updatedAt: now,
-      project: createBlankProject(name),
+      project: createBlankProject(name, id),
     };
     setSpaces((current) => [...current, nextSpace]);
+    setSpaceNameDrafts((current) => ({ ...current, [nextSpace.id]: nextSpace.name }));
     setSelectedSpaceId(nextSpace.id);
+    migratedSpaceAssetsRef.current.add(nextSpace.id);
+    initializeBlankProjectFolder(nextSpace);
   }
 
-  function renameSpace(spaceId: string, name: string) {
-    setSpaces((current) => current.map((space) => (space.id === spaceId ? { ...space, name, updatedAt: new Date().toISOString() } : space)));
+  function renameSpaceDraft(spaceId: string, name: string) {
+    setSpaceNameDrafts((current) => ({ ...current, [spaceId]: name }));
+  }
+
+  async function commitSpaceRename(space: PageBuilderSpace) {
+    const nextName = (spaceNameDrafts[space.id] ?? space.name).trim() || space.name;
+    const isStarter = isStarterSpace(space, spaces);
+    const nextFolder = isStarter ? space.assetFolder : getAssetFolderFromName(nextName);
+
+    if (nextName === space.name && nextFolder === space.assetFolder) {
+      return;
+    }
+
+    if (isStarter || nextFolder === space.assetFolder) {
+      setSpaces((current) => current.map((currentSpace) => (currentSpace.id === space.id ? { ...currentSpace, name: nextName, updatedAt: new Date().toISOString() } : currentSpace)));
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/dev-assets/rename-project", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldFolder: space.assetFolder, nextName, project: space.project }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Project rename failed.");
+      }
+
+      const renamed = (await response.json()) as { assetFolder?: string; assetBasePath?: string; project?: ProjectJsonImport };
+      if (!renamed.assetFolder || !renamed.project || !isProjectJsonImport(renamed.project)) {
+        throw new Error("Project rename failed.");
+      }
+
+      setSpaces((current) =>
+        current.map((currentSpace) =>
+          currentSpace.id === space.id
+            ? {
+                ...currentSpace,
+                name: nextName,
+                assetFolder: renamed.assetFolder as string,
+                assetBasePath: renamed.assetBasePath ?? `/${renamed.assetFolder}`,
+                updatedAt: new Date().toISOString(),
+                project: renamed.project as ProjectJsonImport,
+              }
+            : currentSpace,
+        ),
+      );
+      setSpaceNameDrafts((current) => ({ ...current, [space.id]: nextName }));
+      if (activeSpaceId === space.id) {
+        const nextCanvas = getProjectCanvas(renamed.project, canvasRef.current);
+        if (nextCanvas) {
+          setCanvas(nextCanvas);
+          canvasRef.current = nextCanvas;
+        }
+      }
+    } catch {
+      setEditorWarning("Project folder rename failed. Name was not saved.");
+      setSpaceNameDrafts((current) => ({ ...current, [space.id]: space.name }));
+    }
   }
 
   function openSpace(space: PageBuilderSpace) {
     const nextCanvas = getProjectCanvas(space.project, canvasRef.current);
+    saveActiveSpaceSnapshot(canvasRef.current);
     if (nextCanvas) {
-      commitCanvas(nextCanvas);
+      setCanvas(nextCanvas);
+      canvasRef.current = nextCanvas;
+      lastSavedJsonRef.current = JSON.stringify(nextCanvas);
+      setSaveState("saved");
       setSelectedId(undefined);
       setSelectedIds([]);
       setEditingTextId(undefined);
@@ -1647,16 +1918,25 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       return;
     }
 
-    setSpaces((current) => {
-      const nextSpaces = current.filter((currentSpace) => currentSpace.id !== space.id);
-      if (selectedSpaceId === space.id) {
-        setSelectedSpaceId(nextSpaces[0]?.id ?? "");
-      }
-      if (activeSpaceId === space.id) {
-        setActiveSpaceId(nextSpaces[0]?.id ?? "");
-      }
-      return nextSpaces;
-    });
+    const nextSpaces = spaces.filter((currentSpace) => currentSpace.id !== space.id);
+    void fetch("/api/dev-assets/delete-project", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetFolder: space.assetFolder, activeFolders: nextSpaces.map((nextSpace) => nextSpace.assetFolder) }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          setEditorWarning("Project folder cleanup failed.");
+        }
+      })
+      .catch(() => setEditorWarning("Project folder cleanup failed."));
+    if (selectedSpaceId === space.id) {
+      setSelectedSpaceId(nextSpaces[0]?.id ?? "");
+    }
+    if (activeSpaceId === space.id) {
+      setActiveSpaceId(nextSpaces[0]?.id ?? "");
+    }
+    setSpaces(nextSpaces);
   }
 
   async function importProjectJson(event: ChangeEvent<HTMLInputElement>) {
@@ -1953,14 +2233,14 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           {QUICK_TOOLS_ICON}
         </button>
         <div className="canvas-quick-tools-menu">
+          <button type="button" onClick={openSpaces}>
+            Open Spaces
+          </button>
           <button type="button" onClick={exportProjectJson}>
             Export Project
           </button>
           <button type="button" onClick={() => importInputRef.current?.click()}>
             Import Project
-          </button>
-          <button type="button" onClick={openSpaces}>
-            Open Spaces
           </button>
           <button
             type="button"
@@ -1979,18 +2259,27 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         </div>
         <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json,.webroom.json,.pagebuilder.json,.zip" onChange={importProjectJson} />
       </div>
+      {exportSuccessOpen ? (
+        <div
+          className={`canvas-export-success-overlay${exportSuccessClosing ? " is-closing" : ""}`}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              dismissExportSuccessOverlay();
+            }
+          }}
+        >
+          <span>
+            Perfect! Send this .zip to me using{" "}
+            <a href="https://send.monks.tools/" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+              this tool
+            </a>
+            .
+          </span>
+        </div>
+      ) : null}
       {quickToolsToast ? (
         <div className="canvas-quick-tools-toast">
-          {quickToolsToast === EXPORT_SUCCESS_MESSAGE ? (
-            <>
-              Perfect! Send this .zip to me using{" "}
-              <a href="https://send.monks.tools/" target="_blank" rel="noreferrer">
-                this tool
-              </a>.
-            </>
-          ) : (
-            quickToolsToast
-          )}
+          {quickToolsToast}
         </div>
       ) : null}
       {editorWarning ? <div className="canvas-editor-warning">{editorWarning}</div> : null}
@@ -2009,8 +2298,14 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
                 return (
                   <div key={space.id} className={`pagebuilder-space-card${selectedSpaceId === space.id ? " is-selected" : ""}`} onClick={() => setSelectedSpaceId(space.id)}>
                     <input
-                      value={space.name}
-                      onChange={(event) => renameSpace(space.id, event.target.value)}
+                      value={spaceNameDrafts[space.id] ?? space.name}
+                      onChange={(event) => renameSpaceDraft(space.id, event.target.value)}
+                      onBlur={() => void commitSpaceRename(space)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.currentTarget.blur();
+                        }
+                      }}
                       onClick={(event) => event.stopPropagation()}
                       aria-label="Project name"
                     />
@@ -2503,11 +2798,18 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
           onCollapse={() => setInspectorCollapsed(true)}
         />
       ) : null}
-      {pickerKind ? <AssetPicker kind={pickerKind} onClose={() => setPickerKind(null)} onSelect={onPickerSelect} /> : null}
+      {pickerKind ? (
+        <AssetPicker
+          kind={pickerKind}
+          projectFolder={spaces.find((space) => space.id === activeSpaceId)?.assetFolder}
+          onClose={() => setPickerKind(null)}
+          onSelect={onPickerSelect}
+        />
+      ) : null}
       {showBetaSplash ? (
         <div className={`webrooms-splash-overlay${splashClosing ? " is-closing" : ""}`}>
           <div className="webrooms-splash-card">
-            <img className="webrooms-splash-logo" src="/images/xsorce.png" alt="xsorce" />
+            <img className="webrooms-splash-logo" src="/project1/images/xsorce.png" alt="xsorce" />
             <div className="webrooms-splash-intro">
               <p>welcome to xsorce's</p>
               <h1>PageBuilder</h1>

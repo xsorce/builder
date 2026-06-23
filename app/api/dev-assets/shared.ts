@@ -46,6 +46,22 @@ export function getAssetDirectory(kind: AssetKind) {
   return path.join(process.cwd(), "public", config.folder);
 }
 
+export function getProjectAssetDirectory(kind: AssetKind, projectFolder: string | null) {
+  const config = assetConfig[kind];
+  if (!projectFolder || kind === "shapes") {
+    return { directory: getAssetDirectory(kind), publicPath: config.publicPath };
+  }
+
+  if (!/^[a-z0-9-]+$/.test(projectFolder)) {
+    return null;
+  }
+
+  return {
+    directory: path.join(process.cwd(), "public", projectFolder, config.folder),
+    publicPath: `/${projectFolder}/${config.folder}`,
+  };
+}
+
 export function sanitizeFilename(name: string) {
   const parsed = path.parse(name);
   const safeBase = parsed.name

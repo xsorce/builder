@@ -679,6 +679,37 @@ input {
   text-underline-offset: 0.12em;
 }
 
+.canvas-export-success-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: rgba(17, 17, 17, 0.42);
+  backdrop-filter: blur(18px) saturate(0.82);
+  color: rgba(247, 246, 240, 0.94);
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+  font-size: clamp(1rem, 2vw, 1.45rem);
+  line-height: 1.4;
+  text-align: center;
+  animation: canvasExportSuccessFadeIn 220ms ease both;
+}
+
+.canvas-export-success-overlay.is-closing {
+  animation: canvasExportSuccessFadeOut 220ms ease both;
+}
+
+.canvas-export-success-overlay span {
+  max-width: min(34rem, calc(100vw - 2rem));
+}
+
+.canvas-export-success-overlay a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 .pagebuilder-spaces {
   position: fixed;
   inset: 0;
@@ -2013,6 +2044,26 @@ input {
   100% {
     opacity: 0;
     transform: translateY(-8px);
+  }
+}
+
+@keyframes canvasExportSuccessFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes canvasExportSuccessFadeOut {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
   }
 }
 

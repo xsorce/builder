@@ -354,7 +354,7 @@ export function CanvasInspector({ item, items = item ? [item] : [], canvas, back
           {hasSource ? (
             <label className="canvas-field">
               Source
-              <input value={item.src ?? ""} placeholder="/images/example.png" onChange={(event) => onChange({ src: event.target.value || undefined })} />
+              <input value={item.src ?? ""} placeholder="/project1/images/example.png" onChange={(event) => onChange({ src: event.target.value || undefined })} />
             </label>
           ) : null}
 

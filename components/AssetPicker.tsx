@@ -6,6 +6,7 @@ import type { AssetFile, AssetKind } from "@/types/canvas";
 
 type AssetPickerProps = {
   kind: AssetKind;
+  projectFolder?: string;
   onClose: () => void;
   onSelect: (asset: AssetFile) => void;
 };
@@ -66,7 +67,7 @@ const placeholderAssets: Partial<Record<AssetKind, AssetFile>> = {
   },
 };
 
-export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
+export function AssetPicker({ kind, projectFolder, onClose, onSelect }: AssetPickerProps) {
   const [assets, setAssets] = useState<AssetFile[]>([]);
   const [shapeAssets, setShapeAssets] = useState<AssetFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +132,11 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
     setMessage("");
 
     try {
-      const response = await fetch(`/api/dev-assets/list?kind=${kind}`);
+      const params = new URLSearchParams({ kind });
+      if (projectFolder && kind !== "shapes") {
+        params.set("projectFolder", projectFolder);
+      }
+      const response = await fetch(`/api/dev-assets/list?${params}`);
       if (!response.ok) {
         throw new Error("Could not load assets.");
       }
@@ -152,7 +157,7 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
 
   useEffect(() => {
     loadAssets();
-  }, [kind]);
+  }, [kind, projectFolder]);
 
   useEffect(() => {
     return () => {
@@ -187,6 +192,9 @@ export function AssetPicker({ kind, onClose, onSelect }: AssetPickerProps) {
       const formData = new FormData();
       formData.append("kind", kind);
       formData.append("file", file);
+      if (projectFolder && kind !== "shapes") {
+        formData.append("projectFolder", projectFolder);
+      }
 
       const response = await fetch("/api/dev-assets/upload", {
         method: "POST",

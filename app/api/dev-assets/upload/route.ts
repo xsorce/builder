@@ -1,7 +1,7 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { assetConfig, getAssetDirectory, isAssetKind, isLocalHost, sanitizeFilename } from "../shared";
+import { assetConfig, getProjectAssetDirectory, isAssetKind, isLocalHost, sanitizeFilename } from "../shared";
 
 const maxSizeLabelByKind = {
   images: "image size is 10 MB",
@@ -44,6 +44,7 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const kind = formData.get("kind");
   const file = formData.get("file");
+  const projectFolder = formData.get("projectFolder");
 
   if (!isAssetKind(kind) || !(file instanceof File)) {
     return NextResponse.json({ error: "Missing file or invalid asset kind." }, { status: 400 });
@@ -61,7 +62,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `File too large. Max ${maxSizeLabelByKind[kind]}.` }, { status: 413 });
   }
 
-  const directory = getAssetDirectory(kind);
+  const target = getProjectAssetDirectory(kind, typeof projectFolder === "string" ? projectFolder : null);
+  if (!target) {
+    return NextResponse.json({ error: "Invalid project asset folder." }, { status: 400 });
+  }
+
+  const { directory, publicPath } = target;
   await mkdir(directory, { recursive: true });
 
   const finalName = await uniqueFilename(directory, safeName);
@@ -77,7 +83,7 @@ export async function POST(request: Request) {
   await writeFile(resolvedTarget, bytes);
 
   return NextResponse.json({
-    src: `${config.publicPath}/${finalName}`,
+    src: `${publicPath}/${finalName}`,
     name: finalName,
     ext,
     kind: config.kind,
