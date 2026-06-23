@@ -21,6 +21,10 @@ function getPageSlug(slug?: string[]) {
   return pageSlug === "home" ? "" : pageSlug;
 }
 
+function isProjectPageRoute(slug?: string[]) {
+  return Boolean(slug && slug.length > 1);
+}
+
 export async function generateStaticParams() {
   const registry = await readCanvasPageRegistry();
   return registry.map((page) => ({
@@ -46,7 +50,7 @@ export default async function DynamicCanvasPage({ params, searchParams }: PagePr
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const slug = getPageSlug(resolvedParams?.slug);
-  const canvas = await readCanvasPage(slug);
+  const canvas = (await readCanvasPage(slug)) ?? (isProjectPageRoute(resolvedParams?.slug) ? await readCanvasPage("") : null);
 
   if (!canvas) {
     notFound();

@@ -1104,7 +1104,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }, []);
 
   function saveActiveSpaceSnapshot(nextCanvas: CanvasDocument) {
-      if (!activeSpace || !isLocalOnlySpace(activeSpace, spaces)) {
+      if (!activeSpace) {
         return;
       }
 
@@ -1852,8 +1852,8 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   }
 
   function updateSpaceSnapshot(spaceId: string, project: ProjectJsonImport) {
-    setSpaces((current) =>
-      current.map((space) =>
+    setSpaces((current) => {
+      const nextSpaces = current.map((space) =>
         space.id === spaceId
           ? {
               ...space,
@@ -1861,19 +1861,17 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
               project,
             }
           : space,
-      ),
-    );
+      );
+      window.localStorage.setItem(SPACES_STORAGE_KEY, JSON.stringify(nextSpaces));
+      return nextSpaces;
+    });
   }
 
   function openSpaces() {
     if (activeSpaceId) {
       const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-      if (activeSpace && isLocalOnlySpace(activeSpace, spaces)) {
+      if (activeSpace) {
         updateSpaceSnapshot(activeSpaceId, updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace));
-      } else {
-        getProjectExportData()
-          .then((project) => updateSpaceSnapshot(activeSpaceId, project))
-          .catch(() => updateSpaceSnapshot(activeSpaceId, createFallbackProject(canvasRef.current)));
       }
     }
     if (spacesClosingTimerRef.current) {
@@ -2155,9 +2153,12 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     try {
       let parsed: unknown;
       let assetReplacements = new Map<string, string>();
+      let sourceProjectFolder: string | undefined;
       if (file.name.toLowerCase().endsWith(".zip")) {
         const zip = await JSZip.loadAsync(file);
-        const projectFile = zip.file("pagebuilder-project.json");
+        const nestedProjectFile = Object.values(zip.files).find((entry) => !entry.dir && /^projects\/[^/]+\/project\.json$/.test(entry.name));
+        const projectFile = zip.file("pagebuilder-project.json") ?? nestedProjectFile;
+        sourceProjectFolder = nestedProjectFile?.name.split("/")[1];
         if (!projectFile) {
           throw new Error("Missing pagebuilder-project.json.");
         }
@@ -2171,6 +2172,30 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       }
       const currentSlug = getCanvasRouteSlug(canvasRef.current);
       const projectImport = isProjectJsonImport(parsed) ? parsed : isWebRoomPackageImport(parsed) ? parsed.project : null;
+      if (projectImport && activeSpace) {
+        if (!window.confirm("Import Project and replace this project?")) {
+          return;
+        }
+
+        const importedProject = normalizeImportedProjectForSpace(projectImport, activeSpace, sourceProjectFolder);
+        const importedPage = importedProject.pages.find((page) => page.slug === importedProject.currentSlug) ?? importedProject.pages.find((page) => page.slug === "") ?? importedProject.pages[0];
+        if (!importedPage) {
+          setEditorWarning("Invalid project JSON.");
+          return;
+        }
+
+        selectProjectPage(activeSpace, importedPage, importedProject);
+        setSelectedId(undefined);
+        setSelectedIds([]);
+        setEditingTextId(undefined);
+        setBackgroundInspectorOpen(false);
+        setInspectorCollapsed(true);
+        setQuickToolsOpen(false);
+        setEditorWarning("");
+        showQuickToolsToast("Imported project into this browser. Export Project to keep it.");
+        return;
+      }
+
       const importedCanvas = isCanvasImport(parsed)
         ? parsed
         : projectImport
@@ -2203,6 +2228,82 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     } catch {
       setEditorWarning("Invalid project JSON or ZIP.");
     }
+  }
+
+  function normalizeImportedProjectForSpace(projectImport: ProjectJsonImport, space: PageBuilderSpace, sourceProjectFolder?: string): ProjectJsonImport {
+    const usedSlugs = new Set<string>();
+    const slugMap = new Map<string, string>();
+    const pages = projectImport.pages.map((page, index) => {
+      const sourceSlug = normalizeImportedPageSlug(page.slug || page.canvas.slug);
+      const slug = uniqueImportedPageSlug(usedSlugs, sourceSlug, index === 0);
+      const title = page.title || page.canvas.title || slug || "Home";
+      const canvas = { ...(JSON.parse(JSON.stringify(page.canvas)) as CanvasDocument), slug, title };
+      usedSlugs.add(slug);
+      if (!slugMap.has(sourceSlug)) {
+        slugMap.set(sourceSlug, slug);
+      }
+      return { slug, title, file: getSpaceSafeCanvasSlug(space, slug), canvas };
+    });
+
+    pages.forEach((page) => {
+      page.canvas = rewriteImportedProjectLinks(page.canvas, slugMap, space.assetFolder, sourceProjectFolder);
+    });
+
+    const currentSlug = slugMap.get(normalizeImportedPageSlug(projectImport.currentSlug)) ?? pages.find((page) => page.slug === "")?.slug ?? pages[0]?.slug ?? "";
+    return { ...projectImport, currentSlug, pages };
+  }
+
+  function uniqueImportedPageSlug(usedSlugs: Set<string>, sourceSlug: string, preferHome: boolean) {
+    if (preferHome && !sourceSlug && !usedSlugs.has("")) {
+      return "";
+    }
+
+    const base = getProjectFolderName(sourceSlug || "page");
+    let slug = base;
+    let index = 1;
+    while (usedSlugs.has(slug)) {
+      slug = `${base}-${index}`;
+      index += 1;
+    }
+    return slug;
+  }
+
+  function normalizeImportedPageSlug(slug: string | undefined) {
+    const normalized = (slug || "").replace(/^\/+|\/+$/g, "");
+    return normalized === "home" || normalized === "index" ? "" : normalized;
+  }
+
+  function rewriteImportedProjectLinks(canvas: CanvasDocument, slugMap: Map<string, string>, targetProjectFolder: string, sourceProjectFolder?: string) {
+    return {
+      ...canvas,
+      items: canvas.items.map((item) => ({
+        ...item,
+        href: rewriteImportedProjectHref(item.href, slugMap, targetProjectFolder, sourceProjectFolder),
+      })),
+    };
+  }
+
+  function rewriteImportedProjectHref(href: string | undefined, slugMap: Map<string, string>, targetProjectFolder: string, sourceProjectFolder?: string) {
+    if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || /^[a-z][a-z0-9+.-]*:\/\//i.test(href)) {
+      return href;
+    }
+
+    const match = href.match(/^\/?([^?#]*)([?#].*)?$/);
+    if (!match) {
+      return href;
+    }
+
+    const pathPart = (match[1] || "").replace(/^\/+|\/+$/g, "");
+    const candidates = [normalizeImportedPageSlug(pathPart)];
+    if (sourceProjectFolder && pathPart === sourceProjectFolder) {
+      candidates.push("");
+    }
+    if (sourceProjectFolder && pathPart.startsWith(`${sourceProjectFolder}/`)) {
+      candidates.push(normalizeImportedPageSlug(pathPart.slice(sourceProjectFolder.length + 1)));
+    }
+
+    const slug = candidates.map((candidate) => slugMap.get(candidate)).find((candidate): candidate is string => candidate !== undefined);
+    return slug === undefined ? href : `${getProjectPagePath(targetProjectFolder, slug)}${match[2] ?? ""}`;
   }
 
   async function importZipAssets(zip: JSZip, projectFolder: string) {
@@ -3087,11 +3188,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
             </div>
             <div className="webrooms-splash-note">
               <h2>There is No cloud storage yet</h2>
-              <p>Make a new folder on your PC, and upload all images, videos, and audio use on your page from that folder.</p>
-            </div>
-            <div className="webrooms-splash-note">
-              <h2>Export before you leave</h2>
-              <p>Autosave works in case you need to refresh the page, but make sure to export your project before closing. Open Quick Tools in the upper-right corner and export your project as a JSON file.</p>
+              <p>Any images, video, and audio will save to the porjects local folder. When you are ready to publish your site, export the project .zip and send it over to me.</p>
             </div>
             <div className="webrooms-splash-note">
               <h2>Report any issues to me</h2>

@@ -8,10 +8,10 @@
     {
       "id": "text-1782193306281-0",
       "type": "text",
-      "x": 603.24,
-      "y": 327.44,
-      "width": 268,
-      "height": 28,
+      "x": 441.24,
+      "y": 179.44,
+      "width": 578,
+      "height": 325,
       "rotate": 0,
       "zIndex": 2,
       "opacity": 1,
@@ -21,7 +21,7 @@
       "fontFamily": "body",
       "color": "#111111",
       "autoFitText": false,
-      "text": "new textjkhjkkkkhj"
+      "text": "use ctrl + z to undo\n        ctrl + y to redo\n\n        ctrl + d to duplicate\n        backspace to delete\n\n\n\nhold shift while resizing text to increase text size\n\nhold ctrl while resizing images to crop\n\n\nandddd enjoy :)"
     }
   ]
 }

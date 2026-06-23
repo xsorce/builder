@@ -213,11 +213,7 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
     );
   }
 
-  function keepForcedMobileLinks(event: MouseEvent<HTMLElement>) {
-    if (!forcedMobilePreview) {
-      return;
-    }
-
+  function keepProjectScopedLinks(event: MouseEvent<HTMLElement>) {
     const anchor = (event.target as HTMLElement).closest("a");
     if (!anchor || anchor.target === "_blank") {
       return;
@@ -228,18 +224,38 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
       return;
     }
 
-    const url = new URL(href, window.location.href);
-    if (url.origin !== window.location.origin) {
+    const scopedPath = getProjectScopedHref(href);
+    const url = new URL(scopedPath ?? href, window.location.href);
+    if (!scopedPath && url.origin !== window.location.origin) {
       return;
     }
 
-    url.searchParams.set("view", "mobile");
+    if (!scopedPath && !forcedMobilePreview) {
+      return;
+    }
+
+    if (scopedPath) {
+      url.pathname = scopedPath;
+      url.search = "";
+    }
+
+    const currentParams = new URLSearchParams(window.location.search);
+    if (currentParams.get("previewCanvas") === "1") {
+      url.searchParams.set("previewCanvas", "1");
+    }
+    if (currentParams.get("edit") === "1") {
+      url.searchParams.set("edit", "1");
+    }
+    if (forcedMobilePreview) {
+      url.searchParams.set("view", "mobile");
+    }
+
     event.preventDefault();
     window.location.href = `${url.pathname}${url.search}${url.hash}`;
   }
 
   return (
-    <main className={shellClassName} onClick={keepForcedMobileLinks} style={{ minHeight: forcedMobilePreview ? "100dvh" : artboardHeight * scale, visibility: canvasReady ? "visible" : "hidden", backgroundColor: forcedMobilePreview ? undefined : currentCanvas.backgroundColor ?? "#fafaf7" }}>
+    <main className={shellClassName} onClick={keepProjectScopedLinks} style={{ minHeight: forcedMobilePreview ? "100dvh" : artboardHeight * scale, visibility: canvasReady ? "visible" : "hidden", backgroundColor: forcedMobilePreview ? undefined : currentCanvas.backgroundColor ?? "#fafaf7" }}>
       {currentCanvas.backgroundImage ? <div className="canvas-page-background-image" style={getBackgroundImageStyle(currentCanvas)} /> : null}
       <div
         className="canvas-artboard"
@@ -301,6 +317,45 @@ export function CanvasPage({ canvas, editMode = false }: CanvasPageProps) {
       </div>
     </main>
   );
+}
+
+function getProjectScopedHref(href: string) {
+  const path = href.startsWith("page:") ? href.slice(5) : href;
+  const match = path.match(/^\/?([^?#]*)([?#].*)?$/);
+  if (!match) {
+    return null;
+  }
+
+  const routeParts = window.location.pathname.split("/").filter(Boolean);
+  const projectSlug = routeParts[0];
+  if (!projectSlug) {
+    return null;
+  }
+
+  const targetPath = (match[1] ?? "").replace(/^\/+|\/+$/g, "");
+  if (!targetPath) {
+    return null;
+  }
+
+  if (targetPath === projectSlug || targetPath.startsWith(`${projectSlug}/`)) {
+    return null;
+  }
+
+  try {
+    const storedSpaces = window.localStorage.getItem("pagebuilder-spaces-v1");
+    const spaces = storedSpaces ? (JSON.parse(storedSpaces) as Array<{ assetFolder?: string; project?: { pages?: Array<{ slug: string }> } }>) : [];
+    const activeProject = spaces.find((space) => space.assetFolder === projectSlug)?.project;
+    const projectSlugs = new Set(spaces.map((space) => space.assetFolder).filter(Boolean));
+    if (projectSlugs.has(targetPath.split("/")[0])) {
+      return null;
+    }
+
+    const normalizedTarget = targetPath === "home" ? "" : targetPath;
+    const page = activeProject?.pages?.find((projectPage) => projectPage.slug === normalizedTarget);
+    return page ? `/${projectSlug}/${page.slug || "home"}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function getPasswordStorageKey(slug: string) {
