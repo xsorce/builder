@@ -666,8 +666,8 @@ function withSpaceAssetMetadata(space: PageBuilderSpace, index: number): PageBui
   };
 }
 
-function getSpaceSafeCanvasSlug(space: Pick<PageBuilderSpace, "id">) {
-  return `projects/${space.id}/pages/default.json`;
+function getSpaceSafeCanvasSlug(space: Pick<PageBuilderSpace, "id">, slug = "") {
+  return `projects/${space.id}/pages/${slug || "default"}.json`;
 }
 
 function isStarterSpace(space: PageBuilderSpace, spaces: PageBuilderSpace[]) {
@@ -701,7 +701,7 @@ function updateProjectCanvas(project: ProjectJsonImport, canvas: CanvasDocument,
   const nextPage = {
     slug: currentSlug,
     title: canvas.title || "Home",
-    file: getSpaceSafeCanvasSlug(space),
+    file: getSpaceSafeCanvasSlug(space, currentSlug),
     canvas,
   };
 
@@ -911,10 +911,20 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       const parsed = rawSpaces ? (JSON.parse(rawSpaces) as PageBuilderSpace[]) : [];
       const validSpaces = Array.isArray(parsed) && parsed.every((space) => space && typeof space.id === "string" && typeof space.name === "string" && isProjectJsonImport(space.project)) ? parsed : [];
       const nextSpaces = validSpaces.length ? repairSpaces(validSpaces, initialCanvas) : [createDefaultSpace(initialCanvas)];
+      const [, routeProject, rawRoutePage] = window.location.pathname.split("/");
+      const routePage = rawRoutePage === "home" ? "" : rawRoutePage ?? "";
+      const routeSpace = nextSpaces.find((space) => space.assetFolder === routeProject);
+      const routeCanvas = routeSpace
+        ? (routeSpace.project.pages.find((page) => page.slug === routePage) ?? routeSpace.project.pages.find((page) => page.slug === "") ?? routeSpace.project.pages[0])?.canvas
+        : undefined;
       setSpaces(nextSpaces);
       setSpaceNameDrafts(Object.fromEntries(nextSpaces.map((space) => [space.id, space.name])));
-      setSelectedSpaceId(nextSpaces[0]?.id ?? "");
-      setActiveSpaceId(nextSpaces[0]?.id ?? "");
+      setSelectedSpaceId(routeSpace?.id ?? nextSpaces[0]?.id ?? "");
+      setActiveSpaceId(routeSpace?.id ?? nextSpaces[0]?.id ?? "");
+      if (routeCanvas) {
+        setCanvas(routeCanvas);
+        canvasRef.current = routeCanvas;
+      }
     } catch {
       const defaultSpaces = [createDefaultSpace(initialCanvas)];
       setSpaces(defaultSpaces);
@@ -1970,6 +1980,97 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
     setSpaces((current) => current.map((space) => (space.id === activeSpace.id ? { ...space, project: { ...space.project, currentSlug: page.slug } } : space)));
   }
 
+  function uniqueProjectPageSlug(project: ProjectJsonImport, requestedSlug: string, oldSlug?: string) {
+    const base = getProjectFolderName(requestedSlug || "new-page");
+    const existing = new Set(project.pages.filter((page) => page.slug !== oldSlug).map((page) => page.slug));
+    let candidate = base;
+    let index = 1;
+
+    while (existing.has(candidate)) {
+      candidate = `${base}-${index}`;
+      index += 1;
+    }
+
+    return candidate;
+  }
+
+  function makeBlankProjectPage(space: PageBuilderSpace, title: string, slug: string) {
+    const canvas: CanvasDocument = {
+      slug,
+      title,
+      height: 810,
+      mobileHeight: MOBILE_ARTBOARD_HEIGHT,
+      backgroundColor: "#fafaf7",
+      items: [],
+    };
+
+    return { slug, title, file: getSpaceSafeCanvasSlug(space, slug), canvas };
+  }
+
+  function selectProjectPage(space: PageBuilderSpace, page: ProjectJsonImport["pages"][number], project: ProjectJsonImport) {
+    setCanvas(page.canvas);
+    canvasRef.current = page.canvas;
+    setSelectedId(undefined);
+    setSelectedIds([]);
+    setEditingTextId(undefined);
+    window.history.pushState(null, "", `${getProjectPagePath(space.assetFolder, page.slug)}?edit=1`);
+    updateSpaceSnapshot(space.id, project);
+  }
+
+  function createProjectPage(title: string, requestedSlug: string) {
+    if (!activeSpace) {
+      return;
+    }
+
+    const baseProject = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+    const slug = uniqueProjectPageSlug(baseProject, requestedSlug);
+    const page = makeBlankProjectPage(activeSpace, title, slug);
+    selectProjectPage(activeSpace, page, { ...baseProject, currentSlug: slug, pages: [...baseProject.pages, page] });
+  }
+
+  function duplicateProjectPage(title?: string, requestedSlug?: string) {
+    if (!activeSpace) {
+      return;
+    }
+
+    const baseProject = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+    const source = baseProject.pages.find((page) => page.slug === getCanvasRouteSlug(canvasRef.current)) ?? baseProject.pages.find((page) => page.slug === baseProject.currentSlug) ?? baseProject.pages[0];
+    if (!source) {
+      return;
+    }
+
+    const nextTitle = title || `${source.title} Copy`;
+    const slug = uniqueProjectPageSlug(baseProject, requestedSlug || `${source.slug || "home"}-copy`);
+    const page = { slug, title: nextTitle, file: getSpaceSafeCanvasSlug(activeSpace, slug), canvas: { ...source.canvas, slug, title: nextTitle } };
+    selectProjectPage(activeSpace, page, { ...baseProject, currentSlug: slug, pages: [...baseProject.pages, page] });
+  }
+
+  function updateProjectPage(oldSlug: string, title: string, requestedSlug: string) {
+    if (!activeSpace) {
+      return;
+    }
+
+    const baseProject = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+    const slug = oldSlug === "" ? "" : uniqueProjectPageSlug(baseProject, requestedSlug, oldSlug);
+    const nextPages = baseProject.pages.map((page) => (page.slug === oldSlug ? { slug, title, file: getSpaceSafeCanvasSlug(activeSpace, slug), canvas: { ...page.canvas, slug, title } } : page));
+    const page = nextPages.find((nextPage) => nextPage.slug === slug);
+    if (page) {
+      selectProjectPage(activeSpace, page, { ...baseProject, currentSlug: slug, pages: nextPages });
+    }
+  }
+
+  function deleteProjectPage(slug: string) {
+    if (!activeSpace) {
+      return;
+    }
+
+    const baseProject = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
+    const remaining = baseProject.pages.filter((page) => page.slug !== slug);
+    const pages = remaining.length ? remaining : [makeBlankProjectPage(activeSpace, "Home", "")];
+    const nextPage = pages.find((page) => page.slug === "") ?? pages[0];
+    selectProjectPage(activeSpace, nextPage, { ...baseProject, currentSlug: nextPage.slug, pages });
+  }
+
   function deleteSpace(space: PageBuilderSpace) {
     if (spaces[0]?.id === space.id || space.name.trim().toLowerCase() === "project1" || !window.confirm("This will delete the entire project. Continue?")) {
       return;
@@ -2333,6 +2434,10 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
         pagesOverride={activeProjectPages}
         onSelectPage={useProjectScopedPages ? openProjectPage : undefined}
         getPageHref={activeSpace ? (slug) => `${getProjectPagePath(activeSpace.assetFolder, slug)}?edit=1` : undefined}
+        onCreatePage={useProjectScopedPages ? createProjectPage : undefined}
+        onDuplicatePage={useProjectScopedPages ? duplicateProjectPage : undefined}
+        onUpdatePage={useProjectScopedPages ? updateProjectPage : undefined}
+        onDeletePage={useProjectScopedPages ? deleteProjectPage : undefined}
       />
       <CanvasToolbar
         canSave={canSave}

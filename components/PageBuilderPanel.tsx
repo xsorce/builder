@@ -8,6 +8,10 @@ type PageBuilderPanelProps = {
   pagesOverride?: CanvasPageRegistryEntry[];
   onSelectPage?: (slug: string) => void;
   getPageHref?: (slug: string) => string;
+  onCreatePage?: (title: string, slug: string) => void;
+  onDuplicatePage?: (title?: string, slug?: string) => void;
+  onUpdatePage?: (oldSlug: string, title: string, slug: string) => void;
+  onDeletePage?: (slug: string) => void;
 };
 
 function displayPath(slug: string) {
@@ -24,7 +28,7 @@ function slugify(value: string) {
     .replace(/^-|-$/g, "");
 }
 
-export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, getPageHref }: PageBuilderPanelProps) {
+export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, getPageHref, onCreatePage, onDuplicatePage, onUpdatePage, onDeletePage }: PageBuilderPanelProps) {
   const [pages, setPages] = useState<CanvasPageRegistryEntry[]>([]);
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
@@ -104,6 +108,12 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
 
     setStatus("creating");
 
+    if (onCreatePage) {
+      onCreatePage(nextTitle, nextSlug);
+      cancelEdit();
+      return;
+    }
+
     const response = await fetch("/api/dev-pages/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -121,6 +131,12 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
 
   async function duplicatePage() {
     setStatus("duplicating");
+
+    if (onDuplicatePage) {
+      onDuplicatePage(title.trim() || undefined, slug.trim() || undefined);
+      cancelEdit();
+      return;
+    }
 
     const response = await fetch("/api/dev-pages/duplicate", {
       method: "POST",
@@ -154,6 +170,12 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     }
 
     setStatus("updating");
+
+    if (onUpdatePage) {
+      onUpdatePage(editingOldSlug, nextTitle, nextSlug);
+      cancelEdit();
+      return;
+    }
 
     const response = await fetch("/api/dev-pages/update", {
       method: "POST",
@@ -201,6 +223,12 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     }
 
     setStatus("deleting");
+
+    if (onDeletePage) {
+      onDeletePage(currentSlug);
+      setConfirmDelete(false);
+      return;
+    }
 
     const response = await fetch("/api/dev-pages/delete", {
       method: "POST",
