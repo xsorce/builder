@@ -786,6 +786,46 @@ function getProjectPagePath(projectSlug: string, pageSlug: string) {
   return `/${projectSlug}/${pageSlug || "home"}`;
 }
 
+function updateProjectHref(href: string | undefined, projectSlug: string, oldSlug: string, newSlug: string) {
+  if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || /^[a-z][a-z0-9+.-]*:\/\//i.test(href)) {
+    return href;
+  }
+
+  const match = href.match(/^\/?([^?#]*)([?#].*)?$/);
+  if (!match) {
+    return href;
+  }
+
+  const pathPart = match[1] ? `/${match[1].replace(/^\/+|\/+$/g, "")}` : "/";
+  const oldPage = oldSlug || "home";
+  const newPage = newSlug || "home";
+
+  if (pathPart === `/${projectSlug}/${oldPage}`) {
+    return `${getProjectPagePath(projectSlug, newSlug)}${match[2] ?? ""}`;
+  }
+
+  if (pathPart === `/${oldPage}`) {
+    return `/${newPage}${match[2] ?? ""}`;
+  }
+
+  return href;
+}
+
+function updateProjectCanvasLinks(canvas: CanvasDocument, projectSlug: string, oldSlug: string, newSlug: string) {
+  let changed = false;
+  const items = canvas.items.map((item) => {
+    const href = updateProjectHref(item.href, projectSlug, oldSlug, newSlug);
+    if (href === item.href) {
+      return item;
+    }
+
+    changed = true;
+    return { ...item, href };
+  });
+
+  return changed ? { ...canvas, items } : canvas;
+}
+
 function collectReferencedAssetSources(project: ProjectJsonImport) {
   const sources = new Set<string>();
 
@@ -882,7 +922,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
   const selectedItem = useMemo(() => effectiveItems.find((item) => item.id === selectedId), [effectiveItems, selectedId]);
   const selectedItems = useMemo(() => effectiveItems.filter((item) => selectedIds.includes(item.id)), [effectiveItems, selectedIds]);
   const activeSpace = useMemo(() => spaces.find((space) => space.id === activeSpaceId), [activeSpaceId, spaces]);
-  const useProjectScopedPages = Boolean(activeSpace && (isLocalOnlySpace(activeSpace, spaces) || activeSpace.project.pages.length > 1));
+  const useProjectScopedPages = Boolean(activeSpace);
   const activeProjectPages = useMemo(() => (useProjectScopedPages ? activeSpace?.project.pages.map(({ slug, title, file }) => ({ slug, title, file })) : undefined), [activeSpace, useProjectScopedPages]);
   const selectedTextLike = Boolean(selectedItem && isTextLike(selectedItem));
   const renderDirections = selectedTextLike ? ["nw", "ne", "sw", "se", "w", "e"] : selectedItem?.type === "audio" ? ["nw", "ne", "sw", "se", "n", "s", "w", "e"] : undefined;
@@ -1554,7 +1594,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
       const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
       if (selectedSpace) {
         const project =
-          selectedSpace.id === activeSpaceId && isLocalOnlySpace(selectedSpace, spaces)
+          selectedSpace.id === activeSpaceId
             ? updateProjectCanvas(selectedSpace.project, canvasRef.current, selectedSpace)
             : selectedSpace.project;
         return { ...project, exportedAt: new Date().toISOString() } as ProjectJsonImport & { exportedAt: string };
@@ -1563,7 +1603,7 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
     if (activeSpaceId) {
       const activeSpace = spaces.find((space) => space.id === activeSpaceId);
-      if (activeSpace && isLocalOnlySpace(activeSpace, spaces)) {
+      if (activeSpace) {
         const projectForSpace = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
         updateSpaceSnapshot(activeSpaceId, projectForSpace);
         return projectForSpace;
@@ -2052,7 +2092,14 @@ export function CanvasEditor({ initialCanvas, scale }: CanvasEditorProps) {
 
     const baseProject = updateProjectCanvas(activeSpace.project, canvasRef.current, activeSpace);
     const slug = oldSlug === "" ? "" : uniqueProjectPageSlug(baseProject, requestedSlug, oldSlug);
-    const nextPages = baseProject.pages.map((page) => (page.slug === oldSlug ? { slug, title, file: getSpaceSafeCanvasSlug(activeSpace, slug), canvas: { ...page.canvas, slug, title } } : page));
+    const nextPages = baseProject.pages.map((page) => {
+      if (page.slug === oldSlug) {
+        return { slug, title, file: getSpaceSafeCanvasSlug(activeSpace, slug), canvas: { ...page.canvas, slug, title } };
+      }
+
+      const canvas = slug === oldSlug ? page.canvas : updateProjectCanvasLinks(page.canvas, activeSpace.assetFolder, oldSlug, slug);
+      return canvas === page.canvas ? page : { ...page, canvas };
+    });
     const page = nextPages.find((nextPage) => nextPage.slug === slug);
     if (page) {
       selectProjectPage(activeSpace, page, { ...baseProject, currentSlug: slug, pages: nextPages });

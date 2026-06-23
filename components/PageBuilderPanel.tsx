@@ -8,10 +8,10 @@ type PageBuilderPanelProps = {
   pagesOverride?: CanvasPageRegistryEntry[];
   onSelectPage?: (slug: string) => void;
   getPageHref?: (slug: string) => string;
-  onCreatePage?: (title: string, slug: string) => void;
-  onDuplicatePage?: (title?: string, slug?: string) => void;
-  onUpdatePage?: (oldSlug: string, title: string, slug: string) => void;
-  onDeletePage?: (slug: string) => void;
+  onCreatePage?: (title: string, slug: string) => void | Promise<void>;
+  onDuplicatePage?: (title?: string, slug?: string) => void | Promise<void>;
+  onUpdatePage?: (oldSlug: string, title: string, slug: string) => void | Promise<void>;
+  onDeletePage?: (slug: string) => void | Promise<void>;
 };
 
 function displayPath(slug: string) {
@@ -38,6 +38,7 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
   const [status, setStatus] = useState("");
   const [collapsed, setCollapsed] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
   const [titleRequired, setTitleRequired] = useState(false);
   const [slugRequired, setSlugRequired] = useState(false);
 
@@ -69,6 +70,14 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
       active = false;
     };
   }, [pagesOverride]);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+    setDeletingPageId(null);
+    if (status === "deleting") {
+      setStatus("");
+    }
+  }, [currentSlug, pagesOverride]);
 
   function updateTitle(nextTitle: string) {
     setTitle(nextTitle);
@@ -109,7 +118,7 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     setStatus("creating");
 
     if (onCreatePage) {
-      onCreatePage(nextTitle, nextSlug);
+      await onCreatePage(nextTitle, nextSlug);
       cancelEdit();
       return;
     }
@@ -133,7 +142,7 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     setStatus("duplicating");
 
     if (onDuplicatePage) {
-      onDuplicatePage(title.trim() || undefined, slug.trim() || undefined);
+      await onDuplicatePage(title.trim() || undefined, slug.trim() || undefined);
       cancelEdit();
       return;
     }
@@ -172,7 +181,7 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     setStatus("updating");
 
     if (onUpdatePage) {
-      onUpdatePage(editingOldSlug, nextTitle, nextSlug);
+      await onUpdatePage(editingOldSlug, nextTitle, nextSlug);
       cancelEdit();
       return;
     }
@@ -213,6 +222,7 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     setStatus("");
     setTitleRequired(false);
     setSlugRequired(false);
+    setDeletingPageId(null);
   }
 
   async function deletePage() {
@@ -223,26 +233,36 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
     }
 
     setStatus("deleting");
+    setDeletingPageId(currentSlug);
 
-    if (onDeletePage) {
-      onDeletePage(currentSlug);
+    try {
+      if (onDeletePage) {
+        await onDeletePage(currentSlug);
+        setConfirmDelete(false);
+        setStatus("");
+        return;
+      }
+
+      const response = await fetch("/api/dev-pages/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: currentSlug }),
+      });
+      const data = (await response.json()) as { url?: string; error?: string };
+
+      if (!response.ok || !data.url) {
+        setStatus(data.error ?? "delete failed");
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      console.error(error);
+      setStatus("delete failed");
+    } finally {
+      setDeletingPageId(null);
       setConfirmDelete(false);
-      return;
     }
-
-    const response = await fetch("/api/dev-pages/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug: currentSlug }),
-    });
-    const data = (await response.json()) as { url?: string; error?: string };
-
-    if (!response.ok || !data.url) {
-      setStatus(data.error ?? "delete failed");
-      return;
-    }
-
-    window.location.href = data.url;
   }
 
   if (collapsed) {
@@ -270,6 +290,11 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
             onClick={(event) => {
               if (onSelectPage) {
                 event.preventDefault();
+                if (page.slug === currentSlug) {
+                  editCurrentPage(page);
+                  return;
+                }
+
                 onSelectPage(page.slug);
                 return;
               }
@@ -328,8 +353,8 @@ export function PageBuilderPanel({ currentSlug, pagesOverride, onSelectPage, get
       <div className="canvas-editor-section">
         {confirmDelete ? (
           <div className="page-builder-actions">
-            <button type="button" className="canvas-tool-button page-builder-button" onClick={deletePage}>
-              Confirm
+            <button type="button" className="canvas-tool-button page-builder-button" onClick={deletePage} disabled={deletingPageId === currentSlug}>
+              {deletingPageId === currentSlug ? "Deleting" : "Confirm"}
             </button>
             <button type="button" className="canvas-tool-button page-builder-button" onClick={() => setConfirmDelete(false)}>
               Cancel
